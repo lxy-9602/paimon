@@ -1700,6 +1700,12 @@ If the data size allocated for the sorting task is uneven,which may lead to perf
             <td>Whether to automatically infer the shredding schema when writing Variant columns.</td>
         </tr>
         <tr>
+            <td><h5>variant.restoreShreddingSchemaFromHistory</h5></td>
+            <td style="word-wrap: break-word;">false</td>
+            <td>Boolean</td>
+            <td>Whether to try to restore Variant shredding schemas from available historical files before inferring them from buffered rows. This option only takes effect when 'variant.inferShreddingSchema' is enabled. If historical files are unavailable, or Variant fields are not found in history, their schemas are inferred from the current file's buffered rows.</td>
+        </tr>
+        <tr>
             <td><h5>variant.shredding.maxInferBufferRow</h5></td>
             <td style="word-wrap: break-word;">4096</td>
             <td>Integer</td>
