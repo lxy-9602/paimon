@@ -146,6 +146,7 @@ public class AppendCompactTaskTest {
                     readForCompact,
                     schemaId,
                     rowType,
+                    ignored -> rowType,
                     partitionType,
                     pathFactory,
                     snapshotManager,
