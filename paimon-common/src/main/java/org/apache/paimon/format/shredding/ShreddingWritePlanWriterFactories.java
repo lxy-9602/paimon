@@ -19,6 +19,8 @@
 package org.apache.paimon.format.shredding;
 
 import org.apache.paimon.data.shredding.MapSharedShreddingWritePlanFactory;
+import org.apache.paimon.format.FileFormat;
+import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.format.variant.VariantShreddingWritePlanFactory;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.types.RowType;
@@ -26,11 +28,23 @@ import org.apache.paimon.types.RowType;
 import javax.annotation.Nullable;
 
 import java.util.Set;
+import java.util.function.Supplier;
 
 /** Creates the single active shredding write plan factory for a format writer. */
 public class ShreddingWritePlanWriterFactories {
 
     private ShreddingWritePlanWriterFactories() {}
+
+    public static FormatWriterFactory createWriterFactory(
+            FileFormat fileFormat,
+            RowType rowType,
+            Supplier<ShreddingWritePlanHistory> historySupplier) {
+        if (fileFormat instanceof SupportsShreddingWritePlanHistory) {
+            return ((SupportsShreddingWritePlanHistory) fileFormat)
+                    .createWriterFactory(rowType, historySupplier);
+        }
+        return fileFormat.createWriterFactory(rowType);
+    }
 
     @Nullable
     public static ShreddingWritePlanFactory createWritePlanFactory(

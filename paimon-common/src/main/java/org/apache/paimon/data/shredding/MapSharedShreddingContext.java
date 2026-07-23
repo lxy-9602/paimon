@@ -18,42 +18,38 @@
 
 package org.apache.paimon.data.shredding;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
 import static org.apache.paimon.utils.Preconditions.checkArgument;
 
-/** Cross-file state for shared-shredding MAP columns. */
+/** Inputs used to choose physical column counts for one shared-shredding MAP file. */
 public class MapSharedShreddingContext {
 
-    private static final int WINDOW_SIZE = 20;
     private static final double PERCENTILE_RATIO = 0.90;
     private static final int MAX_CLOSE_ABSOLUTE_SLACK = 4;
     private static final double MAX_CLOSE_RELATIVE_RATIO = 1.25;
 
-    private final Map<String, Integer> columnToMaxColumns;
-    private final Map<String, Deque<Integer>> recentMaxRowWidths;
-    private final List<String> shreddingColumnNames;
+    private final Map<String, Integer> fieldToMaxColumns;
+    private final Map<String, List<Integer>> fieldToHistoricalMaxRowWidths;
 
-    public MapSharedShreddingContext(Map<String, Integer> columnToMaxColumns) {
-        this.columnToMaxColumns = new TreeMap<>(columnToMaxColumns);
-        this.recentMaxRowWidths = new TreeMap<>();
-        this.shreddingColumnNames =
-                Collections.unmodifiableList(new ArrayList<>(this.columnToMaxColumns.keySet()));
+    public MapSharedShreddingContext(
+            Map<String, Integer> fieldToMaxColumns,
+            Map<String, List<Integer>> fieldToHistoricalMaxRowWidths) {
+        this.fieldToMaxColumns = new TreeMap<>(fieldToMaxColumns);
+        this.fieldToHistoricalMaxRowWidths = new TreeMap<>(fieldToHistoricalMaxRowWidths);
     }
 
     /** Returns the physical column count K to use for each shared-shredding field. */
     public Map<String, Integer> computeNextK() {
         Map<String, Integer> result = new TreeMap<>();
-        for (Map.Entry<String, Integer> entry : columnToMaxColumns.entrySet()) {
+        for (Map.Entry<String, Integer> entry : fieldToMaxColumns.entrySet()) {
             String fieldName = entry.getKey();
             int maxColumns = entry.getValue();
-            Deque<Integer> widths = recentMaxRowWidths.get(fieldName);
+            List<Integer> widths = fieldToHistoricalMaxRowWidths.get(fieldName);
             if (widths == null || widths.isEmpty()) {
                 result.put(fieldName, maxColumns);
             } else {
@@ -62,24 +58,6 @@ public class MapSharedShreddingContext {
             }
         }
         return result;
-    }
-
-    /** Reports one completed file's maximum row width for a shared-shredding field. */
-    public void reportFileStats(String fieldName, int maxRowWidth) {
-        Deque<Integer> widths =
-                recentMaxRowWidths.computeIfAbsent(fieldName, ignored -> new ArrayDeque<>());
-        widths.addLast(maxRowWidth);
-        while (widths.size() > WINDOW_SIZE) {
-            widths.removeFirst();
-        }
-    }
-
-    public List<String> getShreddingColumnNames() {
-        return shreddingColumnNames;
-    }
-
-    public boolean isEmpty() {
-        return columnToMaxColumns.isEmpty();
     }
 
     private static int computeAdaptiveWidth(List<Integer> values) {

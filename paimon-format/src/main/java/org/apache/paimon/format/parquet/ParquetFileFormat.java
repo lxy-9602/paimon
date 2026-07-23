@@ -24,12 +24,15 @@ import org.apache.paimon.format.FileFormatFactory.FormatContext;
 import org.apache.paimon.format.FormatReaderFactory;
 import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.format.SimpleStatsExtractor;
-import org.apache.paimon.format.SupportsFieldMetadata;
+import org.apache.paimon.format.SupportsShreddingFileMetadata;
 import org.apache.paimon.format.parquet.writer.RowDataParquetBuilder;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 import org.apache.paimon.format.shredding.ShreddingWritePlanFactory;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.format.shredding.ShreddingWritePlanType;
 import org.apache.paimon.format.shredding.ShreddingWritePlanWriterFactories;
 import org.apache.paimon.format.shredding.ShreddingWritePlanWriterFactory;
+import org.apache.paimon.format.shredding.SupportsShreddingWritePlanHistory;
 import org.apache.paimon.options.CatalogOptions;
 import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.options.Options;
@@ -47,14 +50,15 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import static org.apache.paimon.format.parquet.ParquetFileFormatFactory.IDENTIFIER;
 
 /** Parquet {@link FileFormat}. */
-public class ParquetFileFormat extends FileFormat implements SupportsFieldMetadata {
+public class ParquetFileFormat extends FileFormat
+        implements SupportsShreddingFileMetadata, SupportsShreddingWritePlanHistory {
 
     private static final Set<ShreddingWritePlanType> SUPPORTED_SHREDDING_WRITE_PLANS =
             Collections.unmodifiableSet(
@@ -88,7 +92,7 @@ public class ParquetFileFormat extends FileFormat implements SupportsFieldMetada
     }
 
     @Override
-    public Map<String, Map<String, String>> readFieldMetadata(FormatReaderFactory.Context context)
+    public ShreddingFileMetadata readShreddingFileMetadata(FormatReaderFactory.Context context)
             throws IOException {
         ParquetReadOptions readOptions =
                 ParquetUtil.getParquetReadOptionsBuilder(options)
@@ -101,7 +105,10 @@ public class ParquetFileFormat extends FileFormat implements SupportsFieldMetada
                         readOptions,
                         context.selection());
         try {
-            return ParquetReaderFactory.readFieldMetadata(reader);
+            return new ShreddingFileMetadata(
+                    ParquetSchemaConverter.convertToPaimonRowType(
+                            reader.getFooter().getFileMetaData().getSchema()),
+                    ParquetReaderFactory.readFieldMetadata(reader));
         } finally {
             reader.close();
         }
@@ -109,6 +116,12 @@ public class ParquetFileFormat extends FileFormat implements SupportsFieldMetada
 
     @Override
     public FormatWriterFactory createWriterFactory(RowType type) {
+        return createWriterFactory(type, ShreddingWritePlanHistory::empty);
+    }
+
+    @Override
+    public FormatWriterFactory createWriterFactory(
+            RowType type, Supplier<ShreddingWritePlanHistory> historySupplier) {
         FormatWriterFactory rawFactory =
                 new ParquetWriterFactory(new RowDataParquetBuilder(type, options));
         ShreddingWritePlanFactory writePlanFactory =
@@ -116,7 +129,8 @@ public class ParquetFileFormat extends FileFormat implements SupportsFieldMetada
                         type, formatContext.options(), SUPPORTED_SHREDDING_WRITE_PLANS, IDENTIFIER);
         return writePlanFactory == null
                 ? rawFactory
-                : new ShreddingWritePlanWriterFactory(rawFactory, writePlanFactory);
+                : new ShreddingWritePlanWriterFactory(
+                        rawFactory, writePlanFactory, historySupplier);
     }
 
     @Override

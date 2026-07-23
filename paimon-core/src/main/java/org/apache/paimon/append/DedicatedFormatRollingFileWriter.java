@@ -21,6 +21,7 @@ package org.apache.paimon.append;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.FileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.io.BundleRecords;
 import org.apache.paimon.io.DataFileMeta;
@@ -139,7 +140,8 @@ public class DedicatedFormatRollingFileWriter
             FileIndexOptions fileIndexOptions,
             FileSource fileSource,
             boolean statsDenseStore,
-            @Nullable BlobFileContext context) {
+            @Nullable BlobFileContext context,
+            Supplier<ShreddingWritePlanHistory> historySupplier) {
         // Initialize basic fields
         this.targetFileSize = targetFileSize;
         this.results = new ArrayList<>();
@@ -181,7 +183,8 @@ public class DedicatedFormatRollingFileWriter
                             fileIndexOptions,
                             fileSource,
                             asyncFileWrite,
-                            statsDenseStore);
+                            statsDenseStore,
+                            historySupplier);
         }
 
         if (context != null) {
@@ -250,7 +253,8 @@ public class DedicatedFormatRollingFileWriter
                     FileIndexOptions fileIndexOptions,
                     FileSource fileSource,
                     boolean asyncFileWrite,
-                    boolean statsDenseStore) {
+                    boolean statsDenseStore,
+                    Supplier<ShreddingWritePlanHistory> historySupplier) {
         RowType normalRowType = new RowType(fieldsInNormalFile);
         List<String> normalColumnNames = normalRowType.getFieldNames();
         int[] projectionNormalFields = writeSchema.projectIndexes(normalColumnNames);
@@ -263,7 +267,8 @@ public class DedicatedFormatRollingFileWriter
                                     fileFormat,
                                     normalRowType,
                                     statsCollectorFactories.statsCollectors(normalColumnNames),
-                                    fileCompression),
+                                    fileCompression,
+                                    historySupplier),
                             pathFactory.newPath(),
                             normalRowType,
                             schemaId,
@@ -308,7 +313,8 @@ public class DedicatedFormatRollingFileWriter
                                                 vectorFileFormat,
                                                 vectorStoreRowType,
                                                 statsCollectors,
-                                                fileCompression),
+                                                fileCompression,
+                                                ShreddingWritePlanHistory::empty),
                                         pathFactory.newVectorPath(vectorFormat),
                                         vectorStoreRowType,
                                         schemaId,

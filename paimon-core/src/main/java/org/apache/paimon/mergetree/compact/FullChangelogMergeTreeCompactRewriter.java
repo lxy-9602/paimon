@@ -35,6 +35,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 
 import static org.apache.paimon.mergetree.compact.ChangelogMergeTreeRewriter.UpgradeStrategy.CHANGELOG_NO_REWRITE;
 import static org.apache.paimon.mergetree.compact.ChangelogMergeTreeRewriter.UpgradeStrategy.NO_CHANGELOG_NO_REWRITE;
@@ -48,7 +49,7 @@ public class FullChangelogMergeTreeCompactRewriter extends ChangelogMergeTreeRew
             int maxLevel,
             CoreOptions.MergeEngine mergeEngine,
             FileReaderFactory<KeyValue> readerFactory,
-            KeyValueFileWriterFactory writerFactory,
+            Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider,
             Comparator<InternalRow> keyComparator,
             @Nullable FieldsComparator userDefinedSeqComparator,
             MergeFunctionFactory<KeyValue> mfFactory,
@@ -58,7 +59,7 @@ public class FullChangelogMergeTreeCompactRewriter extends ChangelogMergeTreeRew
                 maxLevel,
                 mergeEngine,
                 readerFactory,
-                writerFactory,
+                writerFactoryProvider,
                 keyComparator,
                 userDefinedSeqComparator,
                 mfFactory,

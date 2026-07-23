@@ -26,8 +26,9 @@ import org.apache.paimon.format.FormatMetadataUtils;
 import org.apache.paimon.format.FormatReadWriteTest;
 import org.apache.paimon.format.FormatReaderContext;
 import org.apache.paimon.format.FormatWriter;
-import org.apache.paimon.format.SupportsFieldMetadata;
+import org.apache.paimon.format.SupportsShreddingFileMetadata;
 import org.apache.paimon.format.SupportsWriterMetadata;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 import org.apache.paimon.fs.PositionOutputStream;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.types.DataTypes;
@@ -112,8 +113,10 @@ public class ParquetFormatReadWriteTest extends FormatReadWriteTest {
 
         FormatReaderContext context =
                 new FormatReaderContext(fileIO, file, fileIO.getFileSize(file));
-        Map<String, Map<String, String>> readFieldMetadata =
-                ((SupportsFieldMetadata) format).readFieldMetadata(context);
+        ShreddingFileMetadata shreddingMetadata =
+                ((SupportsShreddingFileMetadata) format).readShreddingFileMetadata(context);
+        Map<String, Map<String, String>> readFieldMetadata = shreddingMetadata.fieldMetadata();
+        Assertions.assertThat(shreddingMetadata.physicalRowType()).isEqualTo(rowType);
         Assertions.assertThat(readFieldMetadata).containsKey("id").containsKey("name");
         Assertions.assertThat(readFieldMetadata.get("id"))
                 .containsEntry(FormatMetadataUtils.PARQUET_FIELD_ID_KEY, "0");

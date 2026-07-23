@@ -41,6 +41,8 @@ import org.apache.paimon.format.FileFormat;
 import org.apache.paimon.format.FormatReaderContext;
 import org.apache.paimon.format.SimpleColStats;
 import org.apache.paimon.format.SupportsFieldMetadata;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.fs.local.LocalFileIO;
 import org.apache.paimon.io.DataFileMeta;
@@ -94,6 +96,8 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.paimon.io.DataFileMeta.getMaxSequenceNumber;
@@ -509,7 +513,7 @@ public class AppendOnlyWriterTest {
                                 nameToId("a", 0, "b", 1),
                                 fieldToColumns(0, columns(0), 1, columns(0)),
                                 overflowFields(),
-                                1,
+                                3,
                                 1));
     }
 
@@ -528,7 +532,7 @@ public class AppendOnlyWriterTest {
 
         assertThat(readSharedShreddingFieldMeta(context, file, "tags"))
                 .isEqualTo(
-                        sharedShreddingMeta(nameToId(), fieldToColumns(), overflowFields(), 1, 0));
+                        sharedShreddingMeta(nameToId(), fieldToColumns(), overflowFields(), 3, 0));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -557,17 +561,18 @@ public class AppendOnlyWriterTest {
 
         assertThat(readSharedShreddingFieldMeta(context, nullFile, "tags"))
                 .isEqualTo(
-                        sharedShreddingMeta(nameToId(), fieldToColumns(), overflowFields(), 1, 0));
+                        sharedShreddingMeta(nameToId(), fieldToColumns(), overflowFields(), 3, 0));
         assertThat(readSharedShreddingFieldMeta(context, emptyFile, "tags"))
                 .isEqualTo(
-                        sharedShreddingMeta(nameToId(), fieldToColumns(), overflowFields(), 1, 0));
+                        sharedShreddingMeta(nameToId(), fieldToColumns(), overflowFields(), 3, 0));
         assertThat(readSharedShreddingFieldMeta(context, valuesFile, "tags"))
                 .isEqualTo(
                         sharedShreddingMeta(
                                 nameToId("a", 0, "b", 1, "c", 2, "d", 3),
-                                fieldToColumns(0, columns(0), 1, columns(0), 2, columns(0)),
-                                overflowFields(3),
-                                1,
+                                fieldToColumns(
+                                        0, columns(0), 1, columns(0), 2, columns(0), 3, columns(1)),
+                                overflowFields(),
+                                3,
                                 2));
     }
 
@@ -613,9 +618,9 @@ public class AppendOnlyWriterTest {
                 .isEqualTo(
                         sharedShreddingMeta(
                                 nameToId("a", 0, "b", 1, "c", 2),
-                                fieldToColumns(0, columns(0), 1, columns(1)),
-                                overflowFields(2),
-                                2,
+                                fieldToColumns(0, columns(0), 1, columns(1), 2, columns(2)),
+                                overflowFields(),
+                                3,
                                 3));
     }
 
@@ -639,7 +644,13 @@ public class AppendOnlyWriterTest {
 
         AppendOnlyWriter writer =
                 createSharedShreddingAppendWriter(
-                        writeType, context, SCHEMA_ID, -1L, new FileIndexOptions(), blobContext);
+                        writeType,
+                        context,
+                        SCHEMA_ID,
+                        -1L,
+                        new FileIndexOptions(),
+                        blobContext,
+                        ShreddingWritePlanHistory::empty);
 
         writer.write(
                 sharedShreddingLogicalRow(1, map("a", 10L), new BlobData(new byte[] {1, 2, 3})));
@@ -658,7 +669,7 @@ public class AppendOnlyWriterTest {
                                 nameToId("a", 0),
                                 fieldToColumns(0, columns(0)),
                                 overflowFields(),
-                                1,
+                                3,
                                 1));
     }
 
@@ -672,6 +683,71 @@ public class AppendOnlyWriterTest {
         AppendOnlyWriter writer = createSharedShreddingAppendWriter(writeType, context);
 
         Assertions.assertThatCode(writer::toBufferedWriter).doesNotThrowAnyException();
+        writer.close();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {CoreOptions.FILE_FORMAT_PARQUET, CoreOptions.FILE_FORMAT_ORC})
+    public void testSharedShreddingReceivesHistorySupplier(String fileFormat) throws Exception {
+        RowType writeType = sharedShreddingTagsWriteType();
+        SharedShreddingAppendContext context =
+                createSharedShreddingAppendContext(fileFormat, sharedShreddingOptions("tags", 3));
+        AtomicInteger loadCount = new AtomicInteger();
+        AppendOnlyWriter writer =
+                createSharedShreddingAppendWriter(
+                        writeType,
+                        context,
+                        SCHEMA_ID,
+                        -1L,
+                        new FileIndexOptions(),
+                        null,
+                        () -> {
+                            loadCount.incrementAndGet();
+                            return ShreddingWritePlanHistory.empty();
+                        });
+
+        assertThat(loadCount).hasValue(0);
+        writer.write(sharedShreddingRow(1, "a", 10L));
+        assertThat(loadCount).hasValue(1);
+        writer.write(sharedShreddingRow(2, "b", 20L));
+        assertThat(loadCount).hasValue(1);
+        assertSingleNewFile(writer.prepareCommit(true));
+        writer.close();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {CoreOptions.FILE_FORMAT_PARQUET, CoreOptions.FILE_FORMAT_ORC})
+    public void testSharedShreddingRestoresFromPreviousFile(String fileFormat) throws Exception {
+        RowType writeType = sharedShreddingTagsWriteType();
+        SharedShreddingAppendContext context =
+                createSharedShreddingAppendContext(fileFormat, sharedShreddingOptions("tags", 3));
+        ShreddingWritePlanHistory history = sharedShreddingHistory("tags", 3, 1);
+        assertThat(history.files()).hasSize(1);
+        AppendOnlyWriter writer =
+                createSharedShreddingAppendWriter(
+                        writeType,
+                        context,
+                        SCHEMA_ID,
+                        -1L,
+                        new FileIndexOptions(),
+                        null,
+                        () -> history);
+
+        DataFileMeta firstFile =
+                writeSharedShreddingFile(writer, sharedShreddingRow(1, "a", 10L, "b", 20L));
+        MapSharedShreddingFieldMeta firstMeta =
+                readSharedShreddingFieldMeta(context, firstFile, "tags");
+        assertThat(firstMeta.numColumns()).isEqualTo(1);
+        assertThat(firstMeta.maxRowWidth()).isEqualTo(2);
+        assertThat(history.files()).hasSize(2);
+
+        DataFileMeta secondFile =
+                writeSharedShreddingFile(
+                        writer, sharedShreddingRow(2, "c", 30L, "d", 40L, "e", 50L));
+        MapSharedShreddingFieldMeta secondMeta =
+                readSharedShreddingFieldMeta(context, secondFile, "tags");
+        assertThat(secondMeta.numColumns()).isEqualTo(2);
+        assertThat(secondMeta.maxRowWidth()).isEqualTo(3);
         writer.close();
     }
 
@@ -921,6 +997,20 @@ public class AppendOnlyWriterTest {
                 maxRowWidth);
     }
 
+    private ShreddingWritePlanHistory sharedShreddingHistory(
+            String fieldName, int numColumns, int maxRowWidth) {
+        Map<String, String> metadata = new LinkedHashMap<>();
+        MapSharedShreddingUtils.serializeMetadata(
+                sharedShreddingMeta(
+                        nameToId(), fieldToColumns(), overflowFields(), numColumns, maxRowWidth),
+                "none",
+                metadata);
+        return new ShreddingWritePlanHistory(
+                Collections.singletonList(
+                        new ShreddingFileMetadata(
+                                null, Collections.singletonMap(fieldName, metadata))));
+    }
+
     private Map<String, Integer> nameToId(Object... pairs) {
         Map<String, Integer> result = new TreeMap<>();
         for (int i = 0; i < pairs.length; i += 2) {
@@ -1009,7 +1099,13 @@ public class AppendOnlyWriterTest {
             long maxSequenceNumber,
             FileIndexOptions fileIndexOptions) {
         return createSharedShreddingAppendWriter(
-                writeType, context, schemaId, maxSequenceNumber, fileIndexOptions, null);
+                writeType,
+                context,
+                schemaId,
+                maxSequenceNumber,
+                fileIndexOptions,
+                null,
+                ShreddingWritePlanHistory::empty);
     }
 
     private AppendOnlyWriter createSharedShreddingAppendWriter(
@@ -1018,7 +1114,8 @@ public class AppendOnlyWriterTest {
             long schemaId,
             long maxSequenceNumber,
             FileIndexOptions fileIndexOptions,
-            @Nullable BlobFileContext blobContext) {
+            @Nullable BlobFileContext blobContext,
+            Supplier<ShreddingWritePlanHistory> historySupplier) {
         return new AppendOnlyWriter(
                 context.fileIO,
                 null,
@@ -1047,7 +1144,8 @@ public class AppendOnlyWriterTest {
                 false,
                 context.options.dataEvolutionEnabled(),
                 null,
-                blobContext);
+                blobContext,
+                historySupplier);
     }
 
     private DataFileMeta writeSharedShreddingFile(AppendOnlyWriter writer, InternalRow... rows)
@@ -1257,7 +1355,8 @@ public class AppendOnlyWriterTest {
                         false,
                         options.dataEvolutionEnabled(),
                         null,
-                        BlobFileContext.create(writeSchema, options));
+                        BlobFileContext.create(writeSchema, options),
+                        ShreddingWritePlanHistory::empty);
         writer.setMemoryPool(
                 new HeapMemorySegmentPool(options.writeBufferSize(), options.pageSize()));
         return Pair.of(writer, compactManager.allFiles());

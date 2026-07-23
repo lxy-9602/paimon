@@ -37,6 +37,7 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Function;
 
 import static org.apache.paimon.schema.SchemaValidation.validatePkClusteringOverride;
 import static org.apache.paimon.utils.Preconditions.checkNotNull;
@@ -98,8 +99,8 @@ public class ClusteringCompactManagerFactory implements KvCompactionManagerFacto
                 readerFactoryBuilder.copyWithoutValue().build(partition, bucket, dvFactory);
         KeyValueFileReaderFactory valueReaderFactory =
                 readerFactoryBuilder.copyWithoutProjection().build(partition, bucket, dvFactory);
-        KeyValueFileWriterFactory writerFactory =
-                writerFactoryBuilder.build(partition, bucket, options);
+        Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider =
+                files -> writerFactoryBuilder.build(partition, bucket, options, files);
         return new ClusteringCompactManager(
                 keyType,
                 valueType,
@@ -108,7 +109,7 @@ public class ClusteringCompactManagerFactory implements KvCompactionManagerFacto
                 cacheManager,
                 keyReaderFactory,
                 valueReaderFactory,
-                writerFactory,
+                writerFactoryProvider,
                 compactExecutor,
                 dvMaintainer,
                 options.prepareCommitWaitCompaction(),

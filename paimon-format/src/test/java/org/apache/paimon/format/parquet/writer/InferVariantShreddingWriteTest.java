@@ -30,10 +30,11 @@ import org.apache.paimon.format.FormatReaderContext;
 import org.apache.paimon.format.FormatWriter;
 import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.format.SupportsDirectWrite;
+import org.apache.paimon.format.SupportsShreddingFileMetadata;
 import org.apache.paimon.format.parquet.ParquetFileFormat;
 import org.apache.paimon.format.parquet.ParquetUtil;
 import org.apache.paimon.format.parquet.VariantShreddingReadPlanFactory;
-import org.apache.paimon.format.shredding.InferShreddingWritePlanWriter;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.fs.PositionOutputStream;
@@ -63,7 +64,7 @@ import java.util.UUID;
 import static org.apache.paimon.data.variant.PaimonShreddingUtils.variantShreddingSchema;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link InferShreddingWritePlanWriter}. */
+/** Tests for writing Variant data with an inferred shredding schema. */
 public class InferVariantShreddingWriteTest {
 
     @TempDir java.nio.file.Path tempPath;
@@ -119,6 +120,28 @@ public class InferVariantShreddingWriteTest {
         assertThat(result2.get(0)).isEqualTo(GenericRow.of(GenericRow.of(30)));
         assertThat(result2.get(1)).isEqualTo(GenericRow.of(GenericRow.of(25)));
         assertThat(result2.get(2)).isEqualTo(GenericRow.of(GenericRow.of(35)));
+    }
+
+    @Test
+    public void testReadShreddingFileMetadataWithVariant() throws Exception {
+        ParquetFileFormat format = createFormat();
+        RowType writeType = DataTypes.ROW(DataTypes.FIELD(0, "v", DataTypes.VARIANT()));
+        writeRows(
+                format.createWriterFactory(writeType),
+                GenericRow.of(GenericVariant.fromJson("{\"age\":30,\"name\":\"Alice\"}")));
+
+        ShreddingFileMetadata fileMetadata =
+                ((SupportsShreddingFileMetadata) format)
+                        .readShreddingFileMetadata(
+                                new FormatReaderContext(fileIO, file, fileIO.getFileSize(file)));
+        RowType shreddedValueType =
+                RowType.of(
+                        new DataType[] {DataTypes.BIGINT(), DataTypes.STRING()},
+                        new String[] {"age", "name"});
+        assertThat(fileMetadata.physicalRowType()).isNotNull();
+        RowType physicalVariantType = (RowType) fileMetadata.physicalRowType().getTypeAt(0);
+        assertThat(VariantMetadataUtils.addVariantMetadata(physicalVariantType))
+                .isEqualTo(variantShreddingSchema(shreddedValueType));
     }
 
     @Test

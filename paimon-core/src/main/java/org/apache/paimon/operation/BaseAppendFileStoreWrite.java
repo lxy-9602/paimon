@@ -30,11 +30,13 @@ import org.apache.paimon.deletionvectors.BucketedDvMaintainer;
 import org.apache.paimon.deletionvectors.DeletionVector;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.FileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.io.BundleRecords;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.DataFilePathFactory;
 import org.apache.paimon.io.RowDataRollingFileWriter;
+import org.apache.paimon.io.ShreddingWritePlanHistoryLoader;
 import org.apache.paimon.manifest.FileSource;
 import org.apache.paimon.metrics.MetricRegistry;
 import org.apache.paimon.operation.metrics.BlobFetchMetrics;
@@ -45,6 +47,7 @@ import org.apache.paimon.utils.CommitIncrement;
 import org.apache.paimon.utils.ExceptionUtils;
 import org.apache.paimon.utils.FileStorePathFactory;
 import org.apache.paimon.utils.IOExceptionSupplier;
+import org.apache.paimon.utils.LazyField;
 import org.apache.paimon.utils.LongCounter;
 import org.apache.paimon.utils.MutableObjectIterator;
 import org.apache.paimon.utils.RecordWriter;
@@ -81,6 +84,7 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
     private final FileStorePathFactory pathFactory;
     private final FileIndexOptions fileIndexOptions;
     private final RowType rowType;
+    private final Function<Long, RowType> schemaLoader;
 
     private @Nullable BlobFileContext blobContext;
     private @Nullable BlobFetchMetrics blobFetchMetrics;
@@ -93,6 +97,7 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
             RawFileSplitRead readForCompact,
             long schemaId,
             RowType rowType,
+            Function<Long, RowType> schemaLoader,
             RowType partitionType,
             FileStorePathFactory pathFactory,
             SnapshotManager snapshotManager,
@@ -113,6 +118,7 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
         this.readForCompact = readForCompact;
         this.schemaId = schemaId;
         this.rowType = rowType;
+        this.schemaLoader = schemaLoader;
         this.writeType = rowType;
         this.writeCols = null;
         this.fileFormat = fileFormat(options);
@@ -180,7 +186,8 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
                 options.statsDenseStore(),
                 options.dataEvolutionEnabled(),
                 rowSidecarFileFormat(),
-                blobContext);
+                blobContext,
+                createShreddingHistorySupplier(dataPathFactory, restoredFiles));
     }
 
     @Override
@@ -232,7 +239,8 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
                 createRollingFileWriter(
                         partition,
                         bucket,
-                        () -> new LongCounter(toCompact.get(0).minSequenceNumber()));
+                        () -> new LongCounter(toCompact.get(0).minSequenceNumber()),
+                        toCompact);
         Map<String, IOExceptionSupplier<DeletionVector>> dvFactories = null;
         if (dvFactory != null) {
             dvFactories = new HashMap<>();
@@ -269,7 +277,8 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
                 createRollingFileWriter(
                         partition,
                         bucket,
-                        () -> new LongCounter(toCluster.get(0).minSequenceNumber()));
+                        () -> new LongCounter(toCluster.get(0).minSequenceNumber()),
+                        toCluster);
         try {
             MutableObjectIterator<BinaryRow> sorted = sorter.sort();
             BinaryRow binaryRow = new BinaryRow(sorter.arity());
@@ -296,14 +305,19 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
     }
 
     private RowDataRollingFileWriter createRollingFileWriter(
-            BinaryRow partition, int bucket, Supplier<LongCounter> seqNumCounterSupplier) {
+            BinaryRow partition,
+            int bucket,
+            Supplier<LongCounter> seqNumCounterSupplier,
+            List<DataFileMeta> historyFiles) {
+        DataFilePathFactory dataPathFactory =
+                pathFactory.createDataFilePathFactory(partition, bucket);
         return new RowDataRollingFileWriter(
                 fileIO,
                 schemaId,
                 fileFormat,
                 options.targetFileSize(false),
                 writeType,
-                pathFactory.createDataFilePathFactory(partition, bucket),
+                dataPathFactory,
                 seqNumCounterSupplier,
                 options.fileCompression(),
                 statsCollectors(),
@@ -312,7 +326,28 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
                 options.asyncFileWrite(),
                 options.statsDenseStore(),
                 rowType.equals(writeType) ? null : writeType.getFieldNames(),
-                rowSidecarFileFormat());
+                rowSidecarFileFormat(),
+                createShreddingHistorySupplier(dataPathFactory, historyFiles));
+    }
+
+    private Supplier<ShreddingWritePlanHistory> createShreddingHistorySupplier(
+            DataFilePathFactory dataPathFactory, List<DataFileMeta> restoredFiles) {
+        LazyField<ShreddingWritePlanHistory> history =
+                new LazyField<>(
+                        () ->
+                                ShreddingWritePlanHistoryLoader.load(
+                                        fileIO,
+                                        restoredFiles,
+                                        identifier ->
+                                                identifier.equals(fileFormat.getFormatIdentifier())
+                                                        ? fileFormat
+                                                        : FileFormat.fromIdentifier(
+                                                                identifier,
+                                                                options.toConfiguration()),
+                                        dataPathFactory::toPath,
+                                        schemaLoader,
+                                        schemaId));
+        return history::get;
     }
 
     @Nullable

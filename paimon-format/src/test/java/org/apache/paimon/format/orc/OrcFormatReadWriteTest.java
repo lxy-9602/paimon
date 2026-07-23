@@ -29,8 +29,9 @@ import org.apache.paimon.format.FormatReadWriteTest;
 import org.apache.paimon.format.FormatReaderContext;
 import org.apache.paimon.format.FormatWriter;
 import org.apache.paimon.format.OrcOptions;
-import org.apache.paimon.format.SupportsFieldMetadata;
+import org.apache.paimon.format.SupportsShreddingFileMetadata;
 import org.apache.paimon.format.SupportsWriterMetadata;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 import org.apache.paimon.fs.PositionOutputStream;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.reader.RecordReader;
@@ -136,8 +137,10 @@ public class OrcFormatReadWriteTest extends FormatReadWriteTest {
 
         FormatReaderContext context =
                 new FormatReaderContext(fileIO, file, fileIO.getFileSize(file));
-        Map<String, Map<String, String>> readFieldMetadata =
-                ((SupportsFieldMetadata) newFormat).readFieldMetadata(context);
+        ShreddingFileMetadata shreddingMetadata =
+                ((SupportsShreddingFileMetadata) newFormat).readShreddingFileMetadata(context);
+        Map<String, Map<String, String>> readFieldMetadata = shreddingMetadata.fieldMetadata();
+        assertThat(shreddingMetadata.physicalRowType()).isNull();
         assertThat(readFieldMetadata).containsOnlyKeys("id", "name");
         assertThat(readFieldMetadata.get("id"))
                 .containsEntry(OrcTypeUtil.PAIMON_ORC_FIELD_ID_KEY, "0");

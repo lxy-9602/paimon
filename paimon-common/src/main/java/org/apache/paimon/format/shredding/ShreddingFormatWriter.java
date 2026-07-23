@@ -22,6 +22,7 @@ import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.shredding.ShreddingWritePlan;
 import org.apache.paimon.format.BundleFormatWriter;
 import org.apache.paimon.format.FormatWriter;
+import org.apache.paimon.fs.PositionOutputStream;
 import org.apache.paimon.io.BundleRecords;
 
 import javax.annotation.Nonnull;
@@ -37,27 +38,49 @@ public class ShreddingFormatWriter implements BundleFormatWriter {
     private final SupportsShreddingWritePlan writerFactory;
     private final ShreddingWritePlan writePlan;
     private final String compression;
+    private final ShreddingWritePlanHistory history;
+
+    private long rowCount;
+
+    static FormatWriter create(
+            SupportsShreddingWritePlan writerFactory,
+            PositionOutputStream out,
+            String compression,
+            ShreddingWritePlan writePlan,
+            ShreddingWritePlanHistory history)
+            throws IOException {
+        return new ShreddingFormatWriter(
+                writerFactory.createWithShreddingWritePlan(out, compression, writePlan),
+                writerFactory,
+                writePlan,
+                compression,
+                history);
+    }
 
     public ShreddingFormatWriter(
             FormatWriter delegate,
             SupportsShreddingWritePlan writerFactory,
             ShreddingWritePlan writePlan,
-            String compression) {
+            String compression,
+            ShreddingWritePlanHistory history) {
         this.delegate = delegate;
         this.writerFactory = writerFactory;
         this.writePlan = writePlan;
         this.compression = compression;
+        this.history = history;
     }
 
     @Override
     public void addElement(InternalRow element) throws IOException {
         delegate.addElement(writePlan.toPhysicalRow(element));
+        rowCount++;
     }
 
     @Override
     public void writeBundle(BundleRecords bundle) throws IOException {
         if (delegate instanceof BundleFormatWriter) {
             ((BundleFormatWriter) delegate).writeBundle(new PhysicalBundleRecords(bundle));
+            rowCount += bundle.rowCount();
             return;
         }
 
@@ -79,10 +102,16 @@ public class ShreddingFormatWriter implements BundleFormatWriter {
 
     @Override
     public void close() throws IOException {
+        ShreddingFileMetadata fileMetadata =
+                new ShreddingFileMetadata(
+                        writePlan.physicalRowType(), writePlan.fieldMetadata(compression));
         try {
-            writerFactory.commitShreddingMetadata(delegate, writePlan, compression);
+            writerFactory.commitShreddingMetadata(delegate, fileMetadata);
         } finally {
             delegate.close();
+        }
+        if (rowCount > 0) {
+            history.add(fileMetadata);
         }
     }
 

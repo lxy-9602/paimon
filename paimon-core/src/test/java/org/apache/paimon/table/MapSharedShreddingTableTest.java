@@ -38,6 +38,7 @@ import org.apache.paimon.format.FileFormatDiscover;
 import org.apache.paimon.format.FormatReaderContext;
 import org.apache.paimon.format.SupportsFieldMetadata;
 import org.apache.paimon.index.IndexFileMeta;
+import org.apache.paimon.io.BundleRecords;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.DataFilePathFactory;
 import org.apache.paimon.manifest.FileSource;
@@ -68,9 +69,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.stream.Stream;
 
 import static org.apache.paimon.deletionvectors.DeletionVectorsIndexFile.DELETION_VECTORS_INDEX;
@@ -204,6 +207,146 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
     @ParameterizedTest
     @ValueSource(strings = {"orc", "parquet"})
+    public void testMultipleMapFieldsRestoreColumnCountsIndependently(String format)
+            throws Exception {
+        Table table =
+                createTableWithBucket(
+                        format,
+                        8,
+                        "1",
+                        Arrays.asList("metrics", "labels", "fresh"),
+                        Arrays.asList("metrics", "labels"));
+
+        write(
+                table,
+                GenericRow.of(
+                        1,
+                        mapOf("a", 11L, "b", 12L),
+                        mapOf(
+                                "c", 21L,
+                                "d", 22L,
+                                "e", 23L,
+                                "f", 24L,
+                                "g", 25L,
+                                "h", 26L),
+                        mapOf("i", 31L)));
+
+        catalog.alterTable(
+                identifier(format),
+                Arrays.asList(
+                        SchemaChange.setOption(
+                                "fields.fresh.map.storage-layout", "shared-shredding"),
+                        SchemaChange.setOption(
+                                "fields.fresh.map.shared-shredding.max-columns", "8")),
+                false);
+        table = catalog.getTable(identifier(format));
+
+        write(
+                table,
+                GenericRow.of(
+                        2, mapOf("new-metrics", 41L), mapOf("new-labels", 42L), mapOf("new", 43L)));
+
+        FileStoreTable fileStoreTable = (FileStoreTable) table;
+        List<DataFileWithSplit> files = currentDataFiles(fileStoreTable);
+        files.sort(Comparator.comparingLong(file -> file.dataFile.minSequenceNumber()));
+        assertThat(files).hasSize(2);
+
+        MapSharedShreddingFieldMeta firstMetricsMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "metrics");
+        MapSharedShreddingFieldMeta firstLabelsMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "labels");
+        assertThat(firstMetricsMeta.maxRowWidth()).isEqualTo(2);
+        assertThat(firstLabelsMeta.maxRowWidth()).isEqualTo(6);
+
+        DataFileWithSplit latestFile = files.get(1);
+        MapSharedShreddingFieldMeta metricsMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, latestFile, "metrics");
+        MapSharedShreddingFieldMeta labelsMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, latestFile, "labels");
+        MapSharedShreddingFieldMeta freshMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, latestFile, "fresh");
+        assertThat(metricsMeta.numColumns()).isEqualTo(2);
+        assertThat(labelsMeta.numColumns()).isEqualTo(6);
+        assertThat(freshMeta.numColumns()).isEqualTo(8);
+        assertThat(metricsMeta.maxRowWidth()).isEqualTo(1);
+        assertThat(labelsMeta.maxRowWidth()).isEqualTo(1);
+        assertThat(freshMeta.maxRowWidth()).isEqualTo(1);
+
+        Map<Integer, List<Map<String, Long>>> actual = new LinkedHashMap<>();
+        for (InternalRow row : read(table)) {
+            actual.put(
+                    row.getInt(0),
+                    Arrays.asList(
+                            toJavaMap(row.getMap(1)),
+                            toJavaMap(row.getMap(2)),
+                            toJavaMap(row.getMap(3))));
+        }
+        assertThat(actual)
+                .containsEntry(
+                        1,
+                        Arrays.asList(
+                                javaMapOf("a", 11L, "b", 12L),
+                                javaMapOf(
+                                        "c", 21L,
+                                        "d", 22L,
+                                        "e", 23L,
+                                        "f", 24L,
+                                        "g", 25L,
+                                        "h", 26L),
+                                javaMapOf("i", 31L)))
+                .containsEntry(
+                        2,
+                        Arrays.asList(
+                                javaMapOf("new-metrics", 41L),
+                                javaMapOf("new-labels", 42L),
+                                javaMapOf("new", 43L)));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"orc,parquet", "parquet,orc"})
+    public void testRestoreColumnCountAcrossFileFormats(String initialFormat, String restoredFormat)
+            throws Exception {
+        Table table = createTableWithBucket(initialFormat, 8, "1", "metrics");
+
+        write(table, GenericRow.of(1, mapOf("a", 11L, "b", 12L)));
+
+        catalog.alterTable(
+                identifier(initialFormat),
+                Collections.singletonList(
+                        SchemaChange.setOption(CoreOptions.FILE_FORMAT.key(), restoredFormat)),
+                false);
+        table = catalog.getTable(identifier(initialFormat));
+
+        write(table, GenericRow.of(2, mapOf("c", 21L)));
+
+        FileStoreTable fileStoreTable = (FileStoreTable) table;
+        List<DataFileWithSplit> files = currentDataFiles(fileStoreTable);
+        files.sort(Comparator.comparingLong(file -> file.dataFile.minSequenceNumber()));
+        assertThat(files).hasSize(2);
+        assertThat(files.get(0).dataFile.fileFormat()).isEqualTo(initialFormat);
+        assertThat(files.get(1).dataFile.fileFormat()).isEqualTo(restoredFormat);
+
+        MapSharedShreddingFieldMeta initialMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "metrics");
+        assertThat(initialMeta.numColumns()).isEqualTo(8);
+        assertThat(initialMeta.maxRowWidth()).isEqualTo(2);
+
+        MapSharedShreddingFieldMeta restoredMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(1), "metrics");
+        assertThat(restoredMeta.numColumns()).isEqualTo(2);
+        assertThat(restoredMeta.maxRowWidth()).isEqualTo(1);
+
+        Map<Integer, Map<String, Long>> actual = new LinkedHashMap<>();
+        for (InternalRow row : read(table)) {
+            actual.put(row.getInt(0), toJavaMap(row.getMap(1)));
+        }
+        assertThat(actual)
+                .containsEntry(1, javaMapOf("a", 11L, "b", 12L))
+                .containsEntry(2, javaMapOf("c", 21L));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"orc", "parquet"})
     public void testAppendOnlyCompaction(String format) throws Exception {
         Table table = createCompactingAppendOnlyTable(format);
 
@@ -218,7 +361,7 @@ public class MapSharedShreddingTableTest extends TableTestBase {
         assertThat(files.get(0).dataFile.fileSource()).hasValue(FileSource.COMPACT);
         MapSharedShreddingFieldMeta compactedMeta =
                 readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "metrics");
-        assertThat(compactedMeta.numColumns()).isEqualTo(2);
+        assertThat(compactedMeta.numColumns()).isEqualTo(4);
         assertThat(compactedMeta.maxRowWidth()).isEqualTo(4);
         assertThat(compactedMeta.nameToId()).containsOnlyKeys("a", "b", "c", "d", "e", "f", "g");
 
@@ -381,7 +524,7 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
     @ParameterizedTest
     @ValueSource(strings = {"orc", "parquet"})
-    public void testInferColumnCountFromFirstRowOfEachFile(String format) throws Exception {
+    public void testRestoreColumnCountFromPreviousFile(String format) throws Exception {
         Table table = createTableWithBucket(format, 8, "1", "metrics");
 
         write(
@@ -397,12 +540,12 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
         MapSharedShreddingFieldMeta firstFileMeta =
                 readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "metrics");
-        assertThat(firstFileMeta.numColumns()).isEqualTo(2);
+        assertThat(firstFileMeta.numColumns()).isEqualTo(8);
         assertThat(firstFileMeta.maxRowWidth()).isEqualTo(3);
 
         MapSharedShreddingFieldMeta secondFileMeta =
                 readSharedShreddingFieldMeta(fileStoreTable, files.get(1), "metrics");
-        assertThat(secondFileMeta.numColumns()).isEqualTo(1);
+        assertThat(secondFileMeta.numColumns()).isEqualTo(3);
         assertThat(secondFileMeta.maxRowWidth()).isEqualTo(1);
 
         Map<Integer, Map<String, Long>> actual = new LinkedHashMap<>();
@@ -414,6 +557,119 @@ public class MapSharedShreddingTableTest extends TableTestBase {
                 .containsEntry(1, javaMapOf("a", 11L, "b", 12L))
                 .containsEntry(2, javaMapOf("c", 21L, "d", 22L, "e", 23L))
                 .containsEntry(3, javaMapOf("f", 31L));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"orc", "parquet"})
+    public void testRollingFilesUpdateColumnCountWithinWriter(String format) throws Exception {
+        Table table = createTableWithBucket(format, 8, "1", "metrics");
+        Map<String, String> writeOptions = new LinkedHashMap<>();
+        writeOptions.put(CoreOptions.TARGET_FILE_SIZE.key(), "1 b");
+        writeOptions.put(CoreOptions.FILE_COMPRESSION.key(), "none");
+        writeOptions.put(CoreOptions.WRITE_BATCH_SIZE.key(), "2");
+        Table writeTable = table.copy(writeOptions);
+
+        BatchWriteBuilder writeBuilder = writeTable.newBatchWriteBuilder();
+        try (BatchTableWrite write = writeBuilder.newWrite();
+                BatchTableCommit commit = writeBuilder.newCommit()) {
+            write.writeBundle(
+                    BinaryRow.EMPTY_ROW,
+                    0,
+                    bundleRecords(
+                            GenericRow.of(0, mapOf("a", 0L, "b", 0L, "c", 0L)),
+                            GenericRow.of(1, mapOf("a", 1L, "b", 1L, "c", 1L))));
+            write.writeBundle(
+                    BinaryRow.EMPTY_ROW, 0, bundleRecords(GenericRow.of(2, mapOf("d", 2L))));
+            commit.commit(write.prepareCommit());
+        }
+
+        FileStoreTable fileStoreTable = (FileStoreTable) table;
+        List<DataFileWithSplit> files = currentDataFiles(fileStoreTable);
+        files.sort(Comparator.comparingLong(file -> file.dataFile.minSequenceNumber()));
+        assertThat(files).hasSize(2);
+        assertThat(files.get(0).dataFile.rowCount()).isEqualTo(2);
+        assertThat(files.get(1).dataFile.rowCount()).isEqualTo(1);
+
+        MapSharedShreddingFieldMeta firstFileMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "metrics");
+        assertThat(firstFileMeta.numColumns()).isEqualTo(8);
+        assertThat(firstFileMeta.maxRowWidth()).isEqualTo(3);
+
+        MapSharedShreddingFieldMeta secondFileMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(1), "metrics");
+        assertThat(secondFileMeta.numColumns()).isEqualTo(3);
+        assertThat(secondFileMeta.maxRowWidth()).isEqualTo(1);
+
+        Map<Integer, Map<String, Long>> actual = new LinkedHashMap<>();
+        for (InternalRow row : read(table)) {
+            actual.put(row.getInt(0), toJavaMap(row.getMap(1)));
+        }
+        assertThat(actual)
+                .hasSize(3)
+                .containsEntry(0, javaMapOf("a", 0L, "b", 0L, "c", 0L))
+                .containsEntry(1, javaMapOf("a", 1L, "b", 1L, "c", 1L))
+                .containsEntry(2, javaMapOf("d", 2L));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"orc", "parquet"})
+    public void testHistoryIsIsolatedByPartitionAndBucket(String format) throws Exception {
+        Table table = createPartitionedTable(format);
+
+        writeWithBucketAssigner(
+                table,
+                row -> row.getInt(0) % 2,
+                GenericRow.of(0, mapOf("a", 1L, "b", 2L), 1),
+                GenericRow.of(1, mapOf("c", 3L, "d", 4L, "e", 5L, "f", 6L), 1),
+                GenericRow.of(
+                        2,
+                        mapOf(
+                                "g", 7L,
+                                "h", 8L,
+                                "i", 9L,
+                                "j", 10L,
+                                "k", 11L,
+                                "l", 12L),
+                        2));
+
+        writeWithBucketAssigner(
+                table,
+                row -> row.getInt(0) % 2,
+                GenericRow.of(4, mapOf("m", 13L), 1),
+                GenericRow.of(3, mapOf("n", 14L), 1),
+                GenericRow.of(6, mapOf("o", 15L), 2),
+                GenericRow.of(5, mapOf("p", 16L), 2));
+
+        FileStoreTable fileStoreTable = (FileStoreTable) table;
+        List<DataFileWithSplit> files = currentDataFiles(fileStoreTable);
+        assertThat(files).hasSize(7);
+
+        assertRestoredColumnCount(fileStoreTable, files, 1, 0, 2, 2);
+        assertRestoredColumnCount(fileStoreTable, files, 1, 1, 2, 4);
+        assertRestoredColumnCount(fileStoreTable, files, 2, 0, 2, 6);
+        assertRestoredColumnCount(fileStoreTable, files, 2, 1, 1, 8);
+
+        Map<Integer, Map<String, Long>> actual = new LinkedHashMap<>();
+        for (InternalRow row : read(table)) {
+            actual.put(row.getInt(0), toJavaMap(row.getMap(1)));
+        }
+        assertThat(actual)
+                .hasSize(7)
+                .containsEntry(0, javaMapOf("a", 1L, "b", 2L))
+                .containsEntry(1, javaMapOf("c", 3L, "d", 4L, "e", 5L, "f", 6L))
+                .containsEntry(
+                        2,
+                        javaMapOf(
+                                "g", 7L,
+                                "h", 8L,
+                                "i", 9L,
+                                "j", 10L,
+                                "k", 11L,
+                                "l", 12L))
+                .containsEntry(3, javaMapOf("n", 14L))
+                .containsEntry(4, javaMapOf("m", 13L))
+                .containsEntry(5, javaMapOf("p", 16L))
+                .containsEntry(6, javaMapOf("o", 15L));
     }
 
     @ParameterizedTest
@@ -614,6 +870,128 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
     @ParameterizedTest
     @ValueSource(strings = {"orc", "parquet"})
+    public void testPrimaryKeyPartialCompactionRestoresFromInputs(String format) throws Exception {
+        Table table = createPrimaryKeyPartialCompactionTable(format);
+
+        InternalRow[] wideRows = new InternalRow[500];
+        Random random = new Random(42);
+        for (int i = 0; i < wideRows.length; i++) {
+            byte[] padding = new byte[4096];
+            random.nextBytes(padding);
+            wideRows[i] =
+                    GenericRow.of(
+                            1000 + i,
+                            mapOf(
+                                    "a", (long) i,
+                                    "b", (long) i,
+                                    "c", (long) i,
+                                    "d", (long) i,
+                                    "e", (long) i,
+                                    "f", (long) i,
+                                    "g", (long) i,
+                                    "h", (long) i),
+                            padding);
+        }
+        write(table, wideRows);
+        compactAndCommit(table, BinaryRow.EMPTY_ROW, 0, true);
+
+        write(table, GenericRow.of(1, mapOf("x", 11L), new byte[] {1}));
+        write(table, GenericRow.of(2, mapOf("y", 22L), new byte[] {2}));
+
+        FileStoreTable fileStoreTable = (FileStoreTable) table;
+        List<DataFileWithSplit> files = currentDataFiles(fileStoreTable);
+        assertThat(files).hasSize(2);
+
+        int maxLevel = fileStoreTable.coreOptions().numLevels() - 1;
+        DataFileWithSplit wideFile =
+                files.stream()
+                        .filter(file -> file.dataFile.level() == maxLevel)
+                        .findFirst()
+                        .orElseThrow(AssertionError::new);
+        DataFileWithSplit partialCompactionFile =
+                files.stream()
+                        .filter(file -> file.dataFile.level() < maxLevel)
+                        .findFirst()
+                        .orElseThrow(AssertionError::new);
+
+        MapSharedShreddingFieldMeta wideMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, wideFile, "metrics");
+        assertThat(wideMeta.numColumns()).isEqualTo(10);
+        assertThat(wideMeta.maxRowWidth()).isEqualTo(8);
+
+        MapSharedShreddingFieldMeta partialCompactionMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, partialCompactionFile, "metrics");
+        assertThat(partialCompactionMeta.numColumns()).isEqualTo(1);
+        assertThat(partialCompactionMeta.maxRowWidth()).isEqualTo(1);
+        assertThat(partialCompactionMeta.nameToId()).containsOnlyKeys("x", "y");
+
+        Map<Integer, Map<String, Long>> actual = readMapsById(table.newReadBuilder());
+        assertThat(actual)
+                .hasSize(502)
+                .containsEntry(1, javaMapOf("x", 11L))
+                .containsEntry(2, javaMapOf("y", 22L));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"orc", "parquet"})
+    public void testPrimaryKeyClusteringCompactionRestoresFromInputs(String format)
+            throws Exception {
+        Table table = createPrimaryKeyClusteringTable(format);
+
+        byte[] largePadding = new byte[64 * 1024];
+        new Random(42).nextBytes(largePadding);
+        write(
+                table,
+                GenericRow.of(
+                        1,
+                        100,
+                        mapOf(
+                                "a", 1L,
+                                "b", 2L,
+                                "c", 3L,
+                                "d", 4L,
+                                "e", 5L,
+                                "f", 6L,
+                                "g", 7L,
+                                "h", 8L),
+                        largePadding));
+        write(table, GenericRow.of(2, 10, mapOf("x", 11L), new byte[0]));
+        write(table, GenericRow.of(3, 10, mapOf("y", 12L), new byte[0]));
+
+        table =
+                table.copy(
+                        Collections.singletonMap(
+                                CoreOptions.WRITE_ONLY.key(), Boolean.FALSE.toString()));
+        assertThat(currentDataFiles((FileStoreTable) table)).hasSize(3);
+        compactAndCommit(table, BinaryRow.EMPTY_ROW, 0, false);
+
+        FileStoreTable fileStoreTable = (FileStoreTable) table;
+        List<DataFileWithSplit> files = currentDataFiles(fileStoreTable);
+        assertThat(files).hasSize(2);
+        assertClusteringShreddingMetas(fileStoreTable, files, 1);
+
+        Map<Integer, Map<String, Long>> actual = new LinkedHashMap<>();
+        for (InternalRow row : read(table)) {
+            actual.put(row.getInt(0), toJavaMap(row.getMap(2)));
+        }
+        assertThat(actual)
+                .containsEntry(
+                        1,
+                        javaMapOf(
+                                "a", 1L,
+                                "b", 2L,
+                                "c", 3L,
+                                "d", 4L,
+                                "e", 5L,
+                                "f", 6L,
+                                "g", 7L,
+                                "h", 8L))
+                .containsEntry(2, javaMapOf("x", 11L))
+                .containsEntry(3, javaMapOf("y", 12L));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"orc", "parquet"})
     public void testPrimaryKeyDeletionVectorCompaction(String format) throws Exception {
         Table table = createPrimaryKeyTable(format, false, 2, false, true);
         String padding = String.join("", Collections.nCopies(2048, "X"));
@@ -690,7 +1068,7 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
     @ParameterizedTest
     @CsvSource({"orc,false", "orc,true", "parquet,false", "parquet,true"})
-    public void testPrimaryKeyInfersColumnCountPerFile(String format, boolean thinMode)
+    public void testPrimaryKeyRestoresColumnCountFromPreviousFile(String format, boolean thinMode)
             throws Exception {
         Table table = createPrimaryKeyTable(format, thinMode, 8);
 
@@ -704,12 +1082,12 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
         MapSharedShreddingFieldMeta firstFileMeta =
                 readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "metrics");
-        assertThat(firstFileMeta.numColumns()).isEqualTo(2);
+        assertThat(firstFileMeta.numColumns()).isEqualTo(8);
         assertThat(firstFileMeta.maxRowWidth()).isEqualTo(2);
 
         MapSharedShreddingFieldMeta secondFileMeta =
                 readSharedShreddingFieldMeta(fileStoreTable, files.get(1), "metrics");
-        assertThat(secondFileMeta.numColumns()).isEqualTo(1);
+        assertThat(secondFileMeta.numColumns()).isEqualTo(2);
         assertThat(secondFileMeta.maxRowWidth()).isEqualTo(1);
 
         Map<Integer, Map<String, Long>> actual = new LinkedHashMap<>();
@@ -723,7 +1101,7 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
     @ParameterizedTest
     @ValueSource(strings = {"orc", "parquet"})
-    public void testSwitchMapLayoutAndInferColumns(String format) throws Exception {
+    public void testSwitchMapLayoutUsesMaxColumnsWithoutHistory(String format) throws Exception {
         Table table =
                 createTableWithBucket(
                         format,
@@ -754,7 +1132,7 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
         MapSharedShreddingFieldMeta metricsMeta =
                 readSharedShreddingFieldMeta(fileStoreTable, files.get(1), "metrics");
-        assertThat(metricsMeta.numColumns()).isEqualTo(1);
+        assertThat(metricsMeta.numColumns()).isEqualTo(3);
         assertThat(metricsMeta.maxRowWidth()).isEqualTo(1);
 
         Map<Integer, List<Map<String, Long>>> actual = new LinkedHashMap<>();
@@ -775,7 +1153,7 @@ public class MapSharedShreddingTableTest extends TableTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"orc", "parquet"})
     public void testReadSharedShreddingMapAfterRenameColumn(String format) throws Exception {
-        Table table = createTable(format, "metrics");
+        Table table = createTableWithBucket(format, 8, "1", "metrics");
 
         write(
                 table,
@@ -792,11 +1170,28 @@ public class MapSharedShreddingTableTest extends TableTestBase {
                         SchemaChange.setOption(
                                 "fields.renamed_metrics.map.storage-layout", "shared-shredding"),
                         SchemaChange.setOption(
-                                "fields.renamed_metrics.map.shared-shredding.max-columns", "2")),
+                                "fields.renamed_metrics.map.shared-shredding.max-columns", "8")),
                 false);
         table = catalog.getTable(identifier(format));
 
         assertThat(table.rowType().getFieldNames()).containsExactly("id", "renamed_metrics");
+
+        write(table, GenericRow.of(3, mapOf("d", 31L)));
+
+        FileStoreTable fileStoreTable = (FileStoreTable) table;
+        List<DataFileWithSplit> files = currentDataFiles(fileStoreTable);
+        files.sort(Comparator.comparingLong(file -> file.dataFile.minSequenceNumber()));
+        assertThat(files).hasSize(2);
+
+        MapSharedShreddingFieldMeta oldMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(0), "metrics");
+        assertThat(oldMeta.numColumns()).isEqualTo(8);
+        assertThat(oldMeta.maxRowWidth()).isEqualTo(2);
+
+        MapSharedShreddingFieldMeta renamedMeta =
+                readSharedShreddingFieldMeta(fileStoreTable, files.get(1), "renamed_metrics");
+        assertThat(renamedMeta.numColumns()).isEqualTo(2);
+        assertThat(renamedMeta.maxRowWidth()).isEqualTo(1);
 
         Map<Integer, Map<String, Long>> actual = new LinkedHashMap<>();
         for (InternalRow row : read(table)) {
@@ -805,7 +1200,8 @@ public class MapSharedShreddingTableTest extends TableTestBase {
 
         assertThat(actual)
                 .containsEntry(1, javaMapOf("a", 11L, "b", 12L))
-                .containsEntry(2, javaMapOf("c", 21L));
+                .containsEntry(2, javaMapOf("c", 21L))
+                .containsEntry(3, javaMapOf("d", 31L));
     }
 
     @ParameterizedTest
@@ -1043,6 +1439,27 @@ public class MapSharedShreddingTableTest extends TableTestBase {
         return catalog.getTable(identifier(format));
     }
 
+    private Table createPartitionedTable(String format) throws Exception {
+        catalog.createTable(
+                identifier(format),
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "metrics",
+                                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.BIGINT()))
+                        .column("pt", DataTypes.INT())
+                        .partitionKeys("pt")
+                        .option("bucket", "2")
+                        .option("bucket-key", "id")
+                        .option("file.format", format)
+                        .option(CoreOptions.WRITE_ONLY.key(), "true")
+                        .option("fields.metrics.map.storage-layout", "shared-shredding")
+                        .option("fields.metrics.map.shared-shredding.max-columns", "8")
+                        .build(),
+                true);
+        return catalog.getTable(identifier(format));
+    }
+
     private Table createPrimaryKeyTable(String format, boolean thinMode, int maxColumns)
             throws Exception {
         return createPrimaryKeyTable(format, thinMode, maxColumns, true);
@@ -1110,6 +1527,59 @@ public class MapSharedShreddingTableTest extends TableTestBase {
         return catalog.getTable(identifier(dataFileFormat));
     }
 
+    private Table createPrimaryKeyPartialCompactionTable(String format) throws Exception {
+        catalog.createTable(
+                identifier(format),
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "metrics",
+                                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.BIGINT()))
+                        .column("padding", DataTypes.BYTES())
+                        .primaryKey("id")
+                        .option("bucket", "1")
+                        .option("bucket-key", "id")
+                        .option("file.format", format)
+                        .option(CoreOptions.FILE_COMPRESSION.key(), "none")
+                        .option(CoreOptions.COMMIT_FORCE_COMPACT.key(), "true")
+                        .option(CoreOptions.NUM_SORTED_RUNS_COMPACTION_TRIGGER.key(), "2")
+                        .option(
+                                CoreOptions.COMPACTION_MAX_SIZE_AMPLIFICATION_PERCENT.key(),
+                                "100000")
+                        .option("fields.metrics.map.storage-layout", "shared-shredding")
+                        .option("fields.metrics.map.shared-shredding.max-columns", "10")
+                        .build(),
+                true);
+        return catalog.getTable(identifier(format));
+    }
+
+    private Table createPrimaryKeyClusteringTable(String format) throws Exception {
+        catalog.createTable(
+                identifier(format),
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("cluster", DataTypes.INT())
+                        .column(
+                                "metrics",
+                                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.BIGINT()))
+                        .column("padding", DataTypes.BYTES())
+                        .primaryKey("id")
+                        .option("bucket", "1")
+                        .option("bucket-key", "id")
+                        .option("file.format", format)
+                        .option(CoreOptions.FILE_COMPRESSION.key(), "none")
+                        .option(CoreOptions.TARGET_FILE_SIZE.key(), "8 kb")
+                        .option(CoreOptions.DELETION_VECTORS_ENABLED.key(), "true")
+                        .option(CoreOptions.PK_CLUSTERING_OVERRIDE.key(), "true")
+                        .option(CoreOptions.CLUSTERING_COLUMNS.key(), "cluster")
+                        .option(CoreOptions.WRITE_ONLY.key(), "true")
+                        .option("fields.metrics.map.storage-layout", "shared-shredding")
+                        .option("fields.metrics.map.shared-shredding.max-columns", "10")
+                        .build(),
+                true);
+        return catalog.getTable(identifier(format));
+    }
+
     private Table createPrimaryKeyAggregationTable(String format, boolean thinMode)
             throws Exception {
         catalog.createTable(
@@ -1171,6 +1641,21 @@ public class MapSharedShreddingTableTest extends TableTestBase {
             commit.commit(messages);
             return messages;
         }
+    }
+
+    private BundleRecords bundleRecords(InternalRow... rows) {
+        List<InternalRow> records = Arrays.asList(rows);
+        return new BundleRecords() {
+            @Override
+            public long rowCount() {
+                return records.size();
+            }
+
+            @Override
+            public Iterator<InternalRow> iterator() {
+                return records.iterator();
+            }
+        };
     }
 
     private Table createComplexValueTable(String format) throws Exception {
@@ -1369,6 +1854,52 @@ public class MapSharedShreddingTableTest extends TableTestBase {
             }
         }
         return files;
+    }
+
+    private void assertRestoredColumnCount(
+            FileStoreTable table,
+            List<DataFileWithSplit> files,
+            int partition,
+            int bucket,
+            int expectedFileCount,
+            int expectedNumColumns)
+            throws Exception {
+        List<DataFileWithSplit> matchingFiles = new ArrayList<>();
+        for (DataFileWithSplit file : files) {
+            if (file.partition.getInt(0) == partition && file.bucket == bucket) {
+                matchingFiles.add(file);
+            }
+        }
+        matchingFiles.sort(Comparator.comparingLong(file -> file.dataFile.minSequenceNumber()));
+        assertThat(matchingFiles).hasSize(expectedFileCount);
+
+        MapSharedShreddingFieldMeta latestMeta =
+                readSharedShreddingFieldMeta(
+                        table, matchingFiles.get(matchingFiles.size() - 1), "metrics");
+        assertThat(latestMeta.numColumns()).isEqualTo(expectedNumColumns);
+        assertThat(latestMeta.maxRowWidth()).isEqualTo(1);
+    }
+
+    private void assertClusteringShreddingMetas(
+            FileStoreTable table, List<DataFileWithSplit> files, int expectedNarrowFiles)
+            throws Exception {
+        int narrowFiles = 0;
+        int wideFiles = 0;
+        for (DataFileWithSplit file : files) {
+            assertThat(file.dataFile.fileSource()).hasValue(FileSource.COMPACT);
+            MapSharedShreddingFieldMeta fieldMeta =
+                    readSharedShreddingFieldMeta(table, file, "metrics");
+            if (fieldMeta.maxRowWidth() == 1) {
+                assertThat(fieldMeta.numColumns()).isEqualTo(1);
+                narrowFiles++;
+            } else {
+                assertThat(fieldMeta.maxRowWidth()).isEqualTo(8);
+                assertThat(fieldMeta.numColumns()).isEqualTo(8);
+                wideFiles++;
+            }
+        }
+        assertThat(narrowFiles).isEqualTo(expectedNarrowFiles);
+        assertThat(wideFiles).isEqualTo(1);
     }
 
     private MapSharedShreddingFieldMeta readSharedShreddingFieldMeta(

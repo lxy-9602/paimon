@@ -56,7 +56,7 @@ class LookupMergeTreeCompactRewriterTest {
                         mergeEngine,
                         mock(LookupLevels.class),
                         mock(FileReaderFactory.class),
-                        mock(KeyValueFileWriterFactory.class),
+                        ignored -> mock(KeyValueFileWriterFactory.class),
                         Comparator.comparingInt(row -> row.getInt(0)),
                         null,
                         mock(MergeFunctionFactory.class),

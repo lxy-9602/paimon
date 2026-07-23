@@ -42,12 +42,13 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 
 /** Default {@link CompactRewriter} for merge trees. */
 public class MergeTreeCompactRewriter extends AbstractCompactRewriter {
 
     protected final FileReaderFactory<KeyValue> readerFactory;
-    protected final KeyValueFileWriterFactory writerFactory;
+    private final Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider;
     protected final Comparator<InternalRow> keyComparator;
     @Nullable protected final FieldsComparator userDefinedSeqComparator;
     protected final MergeFunctionFactory<KeyValue> mfFactory;
@@ -56,13 +57,13 @@ public class MergeTreeCompactRewriter extends AbstractCompactRewriter {
 
     public MergeTreeCompactRewriter(
             FileReaderFactory<KeyValue> readerFactory,
-            KeyValueFileWriterFactory writerFactory,
+            Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider,
             Comparator<InternalRow> keyComparator,
             @Nullable FieldsComparator userDefinedSeqComparator,
             MergeFunctionFactory<KeyValue> mfFactory,
             MergeSorter mergeSorter) {
         this.readerFactory = readerFactory;
-        this.writerFactory = writerFactory;
+        this.writerFactoryProvider = writerFactoryProvider;
         this.keyComparator = keyComparator;
         this.userDefinedSeqComparator = userDefinedSeqComparator;
         this.mfFactory = mfFactory;
@@ -77,6 +78,8 @@ public class MergeTreeCompactRewriter extends AbstractCompactRewriter {
 
     protected CompactResult rewriteCompaction(
             int outputLevel, boolean dropDelete, List<List<SortedRun>> sections) throws Exception {
+        List<DataFileMeta> before = extractFilesFromSections(sections);
+        KeyValueFileWriterFactory writerFactory = createWriterFactory(before);
         RollingFileWriter<KeyValue, DataFileMeta> writer =
                 writerFactory.createRollingMergeTreeFileWriter(outputLevel, FileSource.COMPACT);
         RecordReader<KeyValue> reader = null;
@@ -104,7 +107,6 @@ public class MergeTreeCompactRewriter extends AbstractCompactRewriter {
             throw collectedExceptions;
         }
 
-        List<DataFileMeta> before = extractFilesFromSections(sections);
         notifyRewriteCompactBefore(before);
         List<DataFileMeta> after = writer.result();
         after = notifyRewriteCompactAfter(after);
@@ -113,6 +115,10 @@ public class MergeTreeCompactRewriter extends AbstractCompactRewriter {
                     mergeSorter.sortBufferUsedBytes(), mergeSorter.sortBufferTotalBytes());
         }
         return new CompactResult(before, after);
+    }
+
+    protected KeyValueFileWriterFactory createWriterFactory(List<DataFileMeta> files) {
+        return writerFactoryProvider.apply(files);
     }
 
     protected <T> RecordReader<T> readerForMergeTree(

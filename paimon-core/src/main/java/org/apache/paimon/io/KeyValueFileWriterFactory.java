@@ -31,6 +31,8 @@ import org.apache.paimon.format.FileFormat;
 import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.format.SimpleStatsCollector;
 import org.apache.paimon.format.SimpleStatsExtractor;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
+import org.apache.paimon.format.shredding.ShreddingWritePlanWriterFactories;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.manifest.FileSource;
@@ -41,6 +43,7 @@ import org.apache.paimon.types.DataField;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 import org.apache.paimon.utils.FileStorePathFactory;
+import org.apache.paimon.utils.LazyField;
 import org.apache.paimon.utils.Pair;
 import org.apache.paimon.utils.StatsCollectorFactories;
 
@@ -50,11 +53,13 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.paimon.types.BlobType.fieldNamesInBlobFile;
@@ -250,6 +255,7 @@ public class KeyValueFileWriterFactory {
             RowType valueType,
             FileFormat fileFormat,
             Function<String, FileStorePathFactory> format2PathFactory,
+            Function<Long, RowType> schemaLoader,
             long suggestedFileSize) {
         return new Builder(
                 fileIO,
@@ -258,6 +264,7 @@ public class KeyValueFileWriterFactory {
                 valueType,
                 fileFormat,
                 format2PathFactory,
+                schemaLoader,
                 suggestedFileSize);
     }
 
@@ -270,6 +277,7 @@ public class KeyValueFileWriterFactory {
         private final RowType valueType;
         private final FileFormat fileFormat;
         private final Function<String, FileStorePathFactory> format2PathFactory;
+        private final Function<Long, RowType> schemaLoader;
         private final long suggestedFileSize;
 
         private Builder(
@@ -279,6 +287,7 @@ public class KeyValueFileWriterFactory {
                 RowType valueType,
                 FileFormat fileFormat,
                 Function<String, FileStorePathFactory> format2PathFactory,
+                Function<Long, RowType> schemaLoader,
                 long suggestedFileSize) {
             this.fileIO = fileIO;
             this.schemaId = schemaId;
@@ -286,20 +295,28 @@ public class KeyValueFileWriterFactory {
             this.valueType = valueType;
             this.fileFormat = fileFormat;
             this.format2PathFactory = format2PathFactory;
+            this.schemaLoader = schemaLoader;
             this.suggestedFileSize = suggestedFileSize;
         }
 
         public KeyValueFileWriterFactory build(
-                BinaryRow partition, int bucket, CoreOptions options) {
+                BinaryRow partition,
+                int bucket,
+                CoreOptions options,
+                List<DataFileMeta> restoredFiles) {
             FileWriterContextFactory context =
                     new FileWriterContextFactory(
+                            fileIO,
                             partition,
                             bucket,
                             keyType,
                             valueType,
                             fileFormat,
                             format2PathFactory,
-                            options);
+                            options,
+                            restoredFiles,
+                            schemaLoader,
+                            schemaId);
             return new KeyValueFileWriterFactory(
                     fileIO, schemaId, context, suggestedFileSize, options);
         }
@@ -326,15 +343,20 @@ public class KeyValueFileWriterFactory {
         private final Function<String, FileStorePathFactory> parentFactories;
         private final CoreOptions options;
         private final boolean thinModeEnabled;
+        private final Supplier<ShreddingWritePlanHistory> shreddingHistorySupplier;
 
         private FileWriterContextFactory(
+                FileIO fileIO,
                 BinaryRow partition,
                 int bucket,
                 RowType keyType,
                 RowType valueType,
                 FileFormat defaultFileFormat,
                 Function<String, FileStorePathFactory> parentFactories,
-                CoreOptions options) {
+                CoreOptions options,
+                List<DataFileMeta> restoredFiles,
+                Function<Long, RowType> schemaLoader,
+                long currentSchemaId) {
             this.partition = partition;
             this.bucket = bucket;
             this.keyType = keyType;
@@ -384,6 +406,22 @@ public class KeyValueFileWriterFactory {
             this.format2PathFactory = new HashMap<>();
             this.format2WriterFactory = new HashMap<>();
             this.formatFactory = new HashMap<>();
+
+            DataFilePathFactory restoredFilePathFactory =
+                    parentFactories
+                            .apply(defaultFormat)
+                            .createDataFilePathFactory(partition, bucket);
+            LazyField<ShreddingWritePlanHistory> history =
+                    new LazyField<>(
+                            () ->
+                                    ShreddingWritePlanHistoryLoader.load(
+                                            fileIO,
+                                            restoredFiles,
+                                            this::fileFormat,
+                                            restoredFilePathFactory::toPath,
+                                            schemaLoader,
+                                            currentSchemaId));
+            this.shreddingHistorySupplier = history::get;
         }
 
         private boolean supportsThinMode(RowType keyType, RowType valueType) {
@@ -459,7 +497,9 @@ public class KeyValueFileWriterFactory {
         private FormatWriterFactory writerFactory(WriteFormatKey key) {
             return format2WriterFactory.computeIfAbsent(
                     key2Format.apply(key),
-                    format -> fileFormat(format).createWriterFactory(writeRowType));
+                    format ->
+                            ShreddingWritePlanWriterFactories.createWriterFactory(
+                                    fileFormat(format), writeRowType, shreddingHistorySupplier));
         }
 
         private FileFormat fileFormat(String format) {

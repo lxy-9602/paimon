@@ -18,19 +18,14 @@
 
 package org.apache.paimon.format.shredding;
 
-import org.apache.paimon.data.shredding.ShreddingWritePlan;
-import org.apache.paimon.format.FormatWriter;
-import org.apache.paimon.fs.PositionOutputStream;
+import org.apache.paimon.format.FormatWriterFactory;
+import org.apache.paimon.types.RowType;
 
-import java.io.IOException;
+import java.util.function.Supplier;
 
-/** Format writer factories that can create a writer for a shredded physical row layout. */
-public interface SupportsShreddingWritePlan {
+/** A file format which creates writer factories using recovered shredding history. */
+public interface SupportsShreddingWritePlanHistory {
 
-    FormatWriter createWithShreddingWritePlan(
-            PositionOutputStream out, String compression, ShreddingWritePlan writePlan)
-            throws IOException;
-
-    default void commitShreddingMetadata(FormatWriter writer, ShreddingFileMetadata fileMetadata)
-            throws IOException {}
+    FormatWriterFactory createWriterFactory(
+            RowType type, Supplier<ShreddingWritePlanHistory> historySupplier);
 }

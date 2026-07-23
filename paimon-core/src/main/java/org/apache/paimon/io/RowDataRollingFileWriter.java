@@ -21,6 +21,7 @@ package org.apache.paimon.io;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.FileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.manifest.FileSource;
@@ -51,7 +52,8 @@ public class RowDataRollingFileWriter extends RollingFileWriterImpl<InternalRow,
             boolean asyncFileWrite,
             boolean statsDenseStore,
             @Nullable List<String> writeCols,
-            @Nullable FileFormat rowSidecarFormat) {
+            @Nullable FileFormat rowSidecarFormat,
+            Supplier<ShreddingWritePlanHistory> historySupplier) {
         super(
                 () -> {
                     Path dataPath = pathFactory.newPath();
@@ -62,7 +64,11 @@ public class RowDataRollingFileWriter extends RollingFileWriterImpl<InternalRow,
                     return new RowDataFileWriter(
                             fileIO,
                             RollingFileWriter.createFileWriterContext(
-                                    fileFormat, writeSchema, statsCollectors, fileCompression),
+                                    fileFormat,
+                                    writeSchema,
+                                    statsCollectors,
+                                    fileCompression,
+                                    historySupplier),
                             dataPath,
                             writeSchema,
                             schemaId,

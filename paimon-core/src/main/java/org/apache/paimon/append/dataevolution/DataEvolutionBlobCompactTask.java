@@ -24,6 +24,7 @@ import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.blob.BlobFileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.DataFilePathFactory;
 import org.apache.paimon.io.FileWriter;
@@ -135,7 +136,8 @@ public class DataEvolutionBlobCompactTask extends DataEvolutionCompactTask {
                         blobFileFormat,
                         blobWriteType,
                         new SimpleColStatsCollector.Factory[] {NoneSimpleColStatsCollector::new},
-                        "none"),
+                        "none",
+                        ShreddingWritePlanHistory::empty),
                 pathFactory.newBlobPath(),
                 blobWriteType,
                 table.schema().id(),

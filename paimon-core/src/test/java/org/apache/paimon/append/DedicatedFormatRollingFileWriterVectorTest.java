@@ -29,6 +29,7 @@ import org.apache.paimon.fileindex.FileIndexPredicate;
 import org.apache.paimon.fileindex.bitmap.BitmapIndexResult;
 import org.apache.paimon.format.FileFormat;
 import org.apache.paimon.format.blob.BlobFileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.ByteArraySeekableStream;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.fs.local.LocalFileIO;
@@ -119,7 +120,8 @@ public class DedicatedFormatRollingFileWriterVectorTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false,
-                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())));
+                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())),
+                        ShreddingWritePlanHistory::empty);
     }
 
     @Test
@@ -221,7 +223,8 @@ public class DedicatedFormatRollingFileWriterVectorTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false,
-                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())));
+                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())),
+                        ShreddingWritePlanHistory::empty);
 
         List<InternalRow> rows = makeRows(2000, 1);
         writer.writeBundle(new SingleUseBundleRecords(rows));
@@ -263,7 +266,8 @@ public class DedicatedFormatRollingFileWriterVectorTest {
                         new FileIndexOptions(coreOptions),
                         FileSource.APPEND,
                         false,
-                        BlobFileContext.create(SCHEMA, coreOptions));
+                        BlobFileContext.create(SCHEMA, coreOptions),
+                        ShreddingWritePlanHistory::empty);
 
         List<InternalRow> rows = makeRows(4, 10);
         writer.writeBundle(new SingleUseBundleRecords(rows));
@@ -375,7 +379,8 @@ public class DedicatedFormatRollingFileWriterVectorTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false,
-                        null);
+                        null,
+                        ShreddingWritePlanHistory::empty);
 
         // 100k vector-store data would create 1 normal and 3 vector-store files
         int rowNum = 100 * 1000;

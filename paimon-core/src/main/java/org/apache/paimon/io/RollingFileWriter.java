@@ -22,6 +22,8 @@ import org.apache.paimon.annotation.VisibleForTesting;
 import org.apache.paimon.format.FileFormat;
 import org.apache.paimon.format.SimpleStatsCollector;
 import org.apache.paimon.format.avro.AvroFileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
+import org.apache.paimon.format.shredding.ShreddingWritePlanWriterFactories;
 import org.apache.paimon.statistics.NoneSimpleColStatsCollector;
 import org.apache.paimon.statistics.SimpleColStatsCollector;
 import org.apache.paimon.types.RowType;
@@ -29,6 +31,7 @@ import org.apache.paimon.types.RowType;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * A file writer that automatically rolls over to a new file when a target size is reached and
@@ -49,9 +52,11 @@ public interface RollingFileWriter<T, R> extends FileWriter<T, List<R>> {
             FileFormat fileFormat,
             RowType rowType,
             SimpleColStatsCollector.Factory[] statsCollectors,
-            String fileCompression) {
+            String fileCompression,
+            Supplier<ShreddingWritePlanHistory> historySupplier) {
         return new FileWriterContext(
-                fileFormat.createWriterFactory(rowType),
+                ShreddingWritePlanWriterFactories.createWriterFactory(
+                        fileFormat, rowType, historySupplier),
                 createStatsProducer(fileFormat, rowType, statsCollectors),
                 fileCompression);
     }

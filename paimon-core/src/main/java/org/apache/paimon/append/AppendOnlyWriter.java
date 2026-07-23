@@ -27,6 +27,7 @@ import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.disk.RowBuffer;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.FileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.io.BundleRecords;
 import org.apache.paimon.io.CompactIncrement;
@@ -98,6 +99,7 @@ public class AppendOnlyWriter implements BatchRecordWriter, MemoryOwner {
     @Nullable private final IOManager ioManager;
     private final FileIndexOptions fileIndexOptions;
     private final MemorySize maxDiskSize;
+    private final Supplier<ShreddingWritePlanHistory> shreddingHistorySupplier;
 
     @Nullable private CompactDeletionFile compactDeletionFile;
     private SinkWriter<InternalRow> sinkWriter;
@@ -131,7 +133,8 @@ public class AppendOnlyWriter implements BatchRecordWriter, MemoryOwner {
             boolean statsDenseStore,
             boolean dataEvolutionEnabled,
             @Nullable FileFormat rowSidecarFileFormat,
-            @Nullable BlobFileContext blobContext) {
+            @Nullable BlobFileContext blobContext,
+            Supplier<ShreddingWritePlanHistory> shreddingHistorySupplier) {
         this.fileIO = fileIO;
         this.schemaId = schemaId;
         this.fileFormat = fileFormat;
@@ -162,6 +165,7 @@ public class AppendOnlyWriter implements BatchRecordWriter, MemoryOwner {
         this.statsCollectorFactories = statsCollectorFactories;
         this.maxDiskSize = maxDiskSize;
         this.fileIndexOptions = fileIndexOptions;
+        this.shreddingHistorySupplier = shreddingHistorySupplier;
 
         this.sinkWriter =
                 useWriteBuffer
@@ -333,7 +337,8 @@ public class AppendOnlyWriter implements BatchRecordWriter, MemoryOwner {
                     fileIndexOptions,
                     FileSource.APPEND,
                     statsDenseStore,
-                    blobContext);
+                    blobContext,
+                    shreddingHistorySupplier);
         }
         return new RowDataRollingFileWriter(
                 fileIO,
@@ -350,7 +355,8 @@ public class AppendOnlyWriter implements BatchRecordWriter, MemoryOwner {
                 asyncFileWrite,
                 statsDenseStore,
                 writeCols,
-                rowSidecarFileFormat);
+                rowSidecarFileFormat,
+                shreddingHistorySupplier);
     }
 
     private void trySyncLatestCompaction(boolean blocking)

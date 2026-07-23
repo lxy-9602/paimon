@@ -16,21 +16,22 @@
  * limitations under the License.
  */
 
-package org.apache.paimon.format.shredding;
+package org.apache.paimon.format;
 
-import org.apache.paimon.data.shredding.ShreddingWritePlan;
-import org.apache.paimon.format.FormatWriter;
-import org.apache.paimon.fs.PositionOutputStream;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 
 import java.io.IOException;
+import java.util.Map;
 
-/** Format writer factories that can create a writer for a shredded physical row layout. */
-public interface SupportsShreddingWritePlan {
+/** Format capability for recovering shredding schema and field metadata with one file open. */
+public interface SupportsShreddingFileMetadata extends SupportsFieldMetadata {
 
-    FormatWriter createWithShreddingWritePlan(
-            PositionOutputStream out, String compression, ShreddingWritePlan writePlan)
+    ShreddingFileMetadata readShreddingFileMetadata(FormatReaderFactory.Context context)
             throws IOException;
 
-    default void commitShreddingMetadata(FormatWriter writer, ShreddingFileMetadata fileMetadata)
-            throws IOException {}
+    @Override
+    default Map<String, Map<String, String>> readFieldMetadata(FormatReaderFactory.Context context)
+            throws IOException {
+        return readShreddingFileMetadata(context).fieldMetadata();
+    }
 }

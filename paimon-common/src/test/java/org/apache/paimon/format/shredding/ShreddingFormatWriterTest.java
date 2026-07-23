@@ -18,6 +18,7 @@
 
 package org.apache.paimon.format.shredding;
 
+import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.shredding.ShreddingWritePlan;
 import org.apache.paimon.format.FormatWriter;
@@ -39,15 +40,37 @@ class ShreddingFormatWriterTest {
     void testCloseDelegateWhenCommitMetadataFails() {
         IOException failure = new IOException("metadata failed");
         TestingFormatWriter delegate = new TestingFormatWriter();
+        ShreddingWritePlanHistory history = ShreddingWritePlanHistory.empty();
         ShreddingFormatWriter writer =
                 new ShreddingFormatWriter(
                         delegate,
                         new ThrowingMetadataFactory(failure),
                         NoOpWritePlan.INSTANCE,
-                        "none");
+                        "none",
+                        history);
 
         assertThatThrownBy(writer::close).isSameAs(failure);
         assertThat(delegate.closed).isTrue();
+        assertThat(history.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testAddsCompletedFileToHistory() throws Exception {
+        ShreddingWritePlanHistory history = ShreddingWritePlanHistory.empty();
+        ShreddingFormatWriter writer =
+                new ShreddingFormatWriter(
+                        new TestingFormatWriter(),
+                        new TestingMetadataFactory(),
+                        NoOpWritePlan.INSTANCE,
+                        "none",
+                        history);
+
+        writer.addElement(GenericRow.of());
+        writer.close();
+
+        assertThat(history.files()).hasSize(1);
+        assertThat(history.files().get(0).physicalRowType())
+                .isEqualTo(NoOpWritePlan.INSTANCE.physicalRowType());
     }
 
     private static class TestingFormatWriter implements FormatWriter {
@@ -83,10 +106,18 @@ class ShreddingFormatWriterTest {
         }
 
         @Override
-        public void commitShreddingMetadata(
-                FormatWriter writer, ShreddingWritePlan writePlan, String compression)
+        public void commitShreddingMetadata(FormatWriter writer, ShreddingFileMetadata fileMetadata)
                 throws IOException {
             throw failure;
+        }
+    }
+
+    private static class TestingMetadataFactory implements SupportsShreddingWritePlan {
+
+        @Override
+        public FormatWriter createWithShreddingWritePlan(
+                PositionOutputStream out, String compression, ShreddingWritePlan writePlan) {
+            return new TestingFormatWriter();
         }
     }
 

@@ -39,6 +39,7 @@ import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -55,7 +56,7 @@ public abstract class ChangelogMergeTreeRewriter extends MergeTreeCompactRewrite
             int maxLevel,
             MergeEngine mergeEngine,
             FileReaderFactory<KeyValue> readerFactory,
-            KeyValueFileWriterFactory writerFactory,
+            Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider,
             Comparator<InternalRow> keyComparator,
             @Nullable FieldsComparator userDefinedSeqComparator,
             MergeFunctionFactory<KeyValue> mfFactory,
@@ -64,7 +65,7 @@ public abstract class ChangelogMergeTreeRewriter extends MergeTreeCompactRewrite
             boolean forceDropDelete) {
         super(
                 readerFactory,
-                writerFactory,
+                writerFactoryProvider,
                 keyComparator,
                 userDefinedSeqComparator,
                 mfFactory,
@@ -122,12 +123,14 @@ public abstract class ChangelogMergeTreeRewriter extends MergeTreeCompactRewrite
             boolean rewriteCompactFile)
             throws Exception {
 
+        List<DataFileMeta> before = extractFilesFromSections(sections);
         CloseableIterator<ChangelogResult> iterator = null;
         RollingFileWriter<KeyValue, DataFileMeta> compactFileWriter = null;
         RollingFileWriter<KeyValue, DataFileMeta> changelogFileWriter = null;
         Exception collectedExceptions = null;
 
         try {
+            KeyValueFileWriterFactory writerFactory = createWriterFactory(before);
             iterator =
                     readerForMergeTree(sections, createMergeWrapper(outputLevel))
                             .toCloseableIterator();
@@ -174,7 +177,6 @@ public abstract class ChangelogMergeTreeRewriter extends MergeTreeCompactRewrite
             throw collectedExceptions;
         }
 
-        List<DataFileMeta> before = extractFilesFromSections(sections);
         List<DataFileMeta> after =
                 compactFileWriter != null
                         ? compactFileWriter.result()

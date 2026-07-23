@@ -68,6 +68,7 @@ import javax.annotation.Nullable;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.apache.paimon.CoreOptions.ChangelogProducer.FULL_COMPACTION;
@@ -265,8 +266,8 @@ public class MergeTreeCompactManagerFactory implements KvCompactionManagerFactor
         if (recordLevelExpire != null) {
             readerFactory = recordLevelExpire.wrap(readerFactory);
         }
-        KeyValueFileWriterFactory writerFactory =
-                writerFactoryBuilder.build(partition, bucket, options);
+        Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider =
+                files -> writerFactoryBuilder.build(partition, bucket, options, files);
         MergeSorter mergeSorter = new MergeSorter(options, keyType, valueType, ioManager);
         int maxLevel = options.numLevels() - 1;
         MergeEngine mergeEngine = options.mergeEngine();
@@ -277,7 +278,7 @@ public class MergeTreeCompactManagerFactory implements KvCompactionManagerFactor
                     maxLevel,
                     mergeEngine,
                     readerFactory,
-                    writerFactory,
+                    writerFactoryProvider,
                     keyComparator,
                     userDefinedSeqComparator,
                     mfFactory,
@@ -335,7 +336,7 @@ public class MergeTreeCompactManagerFactory implements KvCompactionManagerFactor
                     mergeEngine,
                     lookupLevels,
                     readerFactory,
-                    writerFactory,
+                    writerFactoryProvider,
                     keyComparator,
                     userDefinedSeqComparator,
                     mfFactory,
@@ -348,7 +349,7 @@ public class MergeTreeCompactManagerFactory implements KvCompactionManagerFactor
         } else {
             return new MergeTreeCompactRewriter(
                     readerFactory,
-                    writerFactory,
+                    writerFactoryProvider,
                     keyComparator,
                     userDefinedSeqComparator,
                     mfFactory,

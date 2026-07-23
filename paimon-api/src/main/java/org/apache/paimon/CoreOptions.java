@@ -441,6 +441,16 @@ public class CoreOptions implements Serializable {
                     .withDescription(
                             "Whether to automatically infer the shredding schema when writing Variant columns.");
 
+    public static final ConfigOption<Boolean> VARIANT_RESTORE_SHREDDING_SCHEMA_FROM_HISTORY =
+            key("variant.restoreShreddingSchemaFromHistory")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to try to restore Variant shredding schemas from available historical files before inferring them from buffered rows. "
+                                    + "This option only takes effect when 'variant.inferShreddingSchema' is enabled. "
+                                    + "If historical files are unavailable, or Variant fields are not found in history, "
+                                    + "their schemas are inferred from the current file's buffered rows.");
+
     public static final ConfigOption<Integer> VARIANT_SHREDDING_MAX_SCHEMA_WIDTH =
             key("variant.shredding.maxSchemaWidth")
                     .intType()

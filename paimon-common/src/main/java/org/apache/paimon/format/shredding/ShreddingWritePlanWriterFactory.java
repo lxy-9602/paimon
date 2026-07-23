@@ -18,23 +18,25 @@
 
 package org.apache.paimon.format.shredding;
 
-import org.apache.paimon.data.shredding.ShreddingWritePlan;
 import org.apache.paimon.format.FormatWriter;
 import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.fs.PositionOutputStream;
 import org.apache.paimon.utils.Preconditions;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.function.Supplier;
 
 /** Decorates a raw format writer factory with an active per-file shredding write plan. */
 public class ShreddingWritePlanWriterFactory implements FormatWriterFactory {
 
     private final SupportsShreddingWritePlan delegate;
     private final ShreddingWritePlanFactory writePlanFactory;
+    private final Supplier<ShreddingWritePlanHistory> historySupplier;
 
     public ShreddingWritePlanWriterFactory(
-            FormatWriterFactory delegate, ShreddingWritePlanFactory writePlanFactory) {
+            FormatWriterFactory delegate,
+            ShreddingWritePlanFactory writePlanFactory,
+            Supplier<ShreddingWritePlanHistory> historySupplier) {
         Preconditions.checkArgument(
                 writePlanFactory.shouldCreateWritePlan(),
                 "Shredding write plan factory must be active.");
@@ -45,31 +47,15 @@ public class ShreddingWritePlanWriterFactory implements FormatWriterFactory {
         }
         this.delegate = (SupportsShreddingWritePlan) delegate;
         this.writePlanFactory = writePlanFactory;
+        this.historySupplier = historySupplier;
     }
 
     @Override
     public FormatWriter create(PositionOutputStream out, String compression) throws IOException {
-        if (writePlanFactory.shouldInferWritePlan()) {
-            return new InferShreddingWritePlanWriter(delegate, writePlanFactory, out, compression);
-        }
-
-        return createWriterWithPlan(
-                delegate,
-                out,
-                compression,
-                writePlanFactory.createWritePlan(Collections.emptyList()));
-    }
-
-    static FormatWriter createWriterWithPlan(
-            SupportsShreddingWritePlan delegate,
-            PositionOutputStream out,
-            String compression,
-            ShreddingWritePlan writePlan)
-            throws IOException {
-        return new ShreddingFormatWriter(
-                delegate.createWithShreddingWritePlan(out, compression, writePlan),
-                delegate,
-                writePlan,
-                compression);
+        ShreddingWritePlanHistory history =
+                writePlanFactory.requiresHistory()
+                        ? Preconditions.checkNotNull(historySupplier.get())
+                        : ShreddingWritePlanHistory.empty();
+        return writePlanFactory.prepare(history).createWriter(delegate, out, compression, history);
     }
 }

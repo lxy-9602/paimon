@@ -25,16 +25,19 @@ import org.apache.paimon.format.FileFormatFactory.FormatContext;
 import org.apache.paimon.format.FormatReaderFactory;
 import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.format.SimpleStatsExtractor;
-import org.apache.paimon.format.SupportsFieldMetadata;
+import org.apache.paimon.format.SupportsShreddingFileMetadata;
 import org.apache.paimon.format.orc.filter.OrcFilters;
 import org.apache.paimon.format.orc.filter.OrcPredicateFunctionVisitor;
 import org.apache.paimon.format.orc.filter.OrcSimpleStatsExtractor;
 import org.apache.paimon.format.orc.writer.RowDataVectorizer;
 import org.apache.paimon.format.orc.writer.Vectorizer;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 import org.apache.paimon.format.shredding.ShreddingWritePlanFactory;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.format.shredding.ShreddingWritePlanType;
 import org.apache.paimon.format.shredding.ShreddingWritePlanWriterFactories;
 import org.apache.paimon.format.shredding.ShreddingWritePlanWriterFactory;
+import org.apache.paimon.format.shredding.SupportsShreddingWritePlanHistory;
 import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.Predicate;
@@ -58,10 +61,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.paimon.CoreOptions.DELETION_VECTORS_ENABLED;
@@ -69,7 +72,8 @@ import static org.apache.paimon.format.OrcOptions.ORC_TIMESTAMP_LTZ_LEGACY_TYPE;
 
 /** Orc {@link FileFormat}. */
 @ThreadSafe
-public class OrcFileFormat extends FileFormat implements SupportsFieldMetadata {
+public class OrcFileFormat extends FileFormat
+        implements SupportsShreddingFileMetadata, SupportsShreddingWritePlanHistory {
 
     public static final String IDENTIFIER = "orc";
 
@@ -144,13 +148,13 @@ public class OrcFileFormat extends FileFormat implements SupportsFieldMetadata {
     }
 
     @Override
-    public Map<String, Map<String, String>> readFieldMetadata(FormatReaderFactory.Context context)
+    public ShreddingFileMetadata readShreddingFileMetadata(FormatReaderFactory.Context context)
             throws IOException {
         org.apache.orc.Reader reader =
                 OrcReaderFactory.createReader(
                         readerConf, context.fileIO(), context.filePath(), context.selection());
         try {
-            return OrcReaderFactory.readFieldMetadata(reader);
+            return new ShreddingFileMetadata(null, OrcReaderFactory.readFieldMetadata(reader));
         } finally {
             reader.close();
         }
@@ -174,6 +178,12 @@ public class OrcFileFormat extends FileFormat implements SupportsFieldMetadata {
      */
     @Override
     public FormatWriterFactory createWriterFactory(RowType type) {
+        return createWriterFactory(type, ShreddingWritePlanHistory::empty);
+    }
+
+    @Override
+    public FormatWriterFactory createWriterFactory(
+            RowType type, Supplier<ShreddingWritePlanHistory> historySupplier) {
         ShreddingWritePlanFactory writePlanFactory =
                 ShreddingWritePlanWriterFactories.createWritePlanFactory(
                         type, options, SUPPORTED_SHREDDING_WRITE_PLANS, IDENTIFIER);
@@ -194,7 +204,8 @@ public class OrcFileFormat extends FileFormat implements SupportsFieldMetadata {
                         legacyTimestampLtzType);
         return writePlanFactory == null
                 ? rawFactory
-                : new ShreddingWritePlanWriterFactory(rawFactory, writePlanFactory);
+                : new ShreddingWritePlanWriterFactory(
+                        rawFactory, writePlanFactory, historySupplier);
     }
 
     private Properties getOrcProperties(Options options, FormatContext formatContext) {

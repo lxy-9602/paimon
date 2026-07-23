@@ -55,6 +55,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.PriorityQueue;
+import java.util.function.Function;
 
 /**
  * Handles file rewriting for clustering compaction, including sorting unsorted files (Phase 1) and
@@ -69,7 +70,7 @@ public class ClusteringFileRewriter {
     private final RecordComparator clusteringComparatorInValue;
     private final IOManager ioManager;
     private final KeyValueFileReaderFactory valueReaderFactory;
-    private final KeyValueFileWriterFactory writerFactory;
+    private final Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider;
     private final ClusteringFiles fileLevels;
     private final long targetFileSize;
     private final long sortSpillBufferSize;
@@ -86,7 +87,7 @@ public class ClusteringFileRewriter {
             RecordComparator clusteringComparatorInValue,
             IOManager ioManager,
             KeyValueFileReaderFactory valueReaderFactory,
-            KeyValueFileWriterFactory writerFactory,
+            Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider,
             ClusteringFiles fileLevels,
             long targetFileSize,
             long sortSpillBufferSize,
@@ -101,7 +102,7 @@ public class ClusteringFileRewriter {
         this.clusteringComparatorInValue = clusteringComparatorInValue;
         this.ioManager = ioManager;
         this.valueReaderFactory = valueReaderFactory;
-        this.writerFactory = writerFactory;
+        this.writerFactoryProvider = writerFactoryProvider;
         this.fileLevels = fileLevels;
         this.targetFileSize = targetFileSize;
         this.sortSpillBufferSize = sortSpillBufferSize;
@@ -150,6 +151,8 @@ public class ClusteringFileRewriter {
 
         RowCompactedSerializer keySerializer = new RowCompactedSerializer(keyType);
 
+        KeyValueFileWriterFactory writerFactory =
+                writerFactoryProvider.apply(Collections.singletonList(inputFile));
         RollingFileWriter<KeyValue, DataFileMeta> writer =
                 writerFactory.createRollingClusteringFileWriter();
         try {
@@ -277,6 +280,7 @@ public class ClusteringFileRewriter {
                 }
             }
 
+            KeyValueFileWriterFactory writerFactory = writerFactoryProvider.apply(inputFiles);
             RollingFileWriter<KeyValue, DataFileMeta> writer =
                     writerFactory.createRollingClusteringFileWriter();
             try {

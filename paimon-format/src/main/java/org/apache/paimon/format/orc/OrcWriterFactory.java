@@ -28,6 +28,7 @@ import org.apache.paimon.format.SupportsWriterMetadata;
 import org.apache.paimon.format.orc.writer.OrcBulkWriter;
 import org.apache.paimon.format.orc.writer.RowDataVectorizer;
 import org.apache.paimon.format.orc.writer.Vectorizer;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 import org.apache.paimon.format.shredding.SupportsShreddingWritePlan;
 import org.apache.paimon.fs.PositionOutputStream;
 import org.apache.paimon.options.MemorySize;
@@ -150,9 +151,8 @@ public class OrcWriterFactory implements FormatWriterFactory, SupportsShreddingW
     }
 
     @Override
-    public void commitShreddingMetadata(
-            FormatWriter writer, ShreddingWritePlan writePlan, String compression) {
-        Map<String, Map<String, String>> fieldMetadata = writePlan.fieldMetadata(compression);
+    public void commitShreddingMetadata(FormatWriter writer, ShreddingFileMetadata fileMetadata) {
+        Map<String, Map<String, String>> fieldMetadata = fileMetadata.fieldMetadata();
         if (fieldMetadata.isEmpty()) {
             return;
         }
@@ -161,7 +161,7 @@ public class OrcWriterFactory implements FormatWriterFactory, SupportsShreddingW
         metadata.put(
                 FormatMetadataUtils.ARROW_SCHEMA_METADATA_KEY,
                 FormatMetadataUtils.buildArrowSchemaMetadata(
-                        writePlan.physicalRowType(),
+                        fileMetadata.physicalRowType(),
                         fieldMetadata,
                         OrcTypeUtil.PAIMON_ORC_FIELD_ID_KEY));
         ((SupportsWriterMetadata) writer).addMetadata(metadata);

@@ -578,8 +578,13 @@ public class LookupLevelsTest {
                         rowType,
                         new FlushingFileFormat(identifier),
                         pathFactoryMap,
+                        schemaId -> rowType,
                         VALUE_128_MB.getBytes())
-                .build(BinaryRow.EMPTY_ROW, 0, new CoreOptions(new Options()));
+                .build(
+                        BinaryRow.EMPTY_ROW,
+                        0,
+                        new CoreOptions(new Options()),
+                        Collections.emptyList());
     }
 
     private KeyValueFileReaderFactory createReaderFactory() {

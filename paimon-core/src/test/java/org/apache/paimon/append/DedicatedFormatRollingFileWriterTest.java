@@ -25,6 +25,7 @@ import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.FileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.fs.local.LocalFileIO;
 import org.apache.paimon.io.BundleRecords;
@@ -111,7 +112,8 @@ public class DedicatedFormatRollingFileWriterTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false, // statsDenseStore
-                        BlobFileContext.create(SCHEMA, options));
+                        BlobFileContext.create(SCHEMA, options),
+                        ShreddingWritePlanHistory::empty);
     }
 
     @Test
@@ -195,7 +197,8 @@ public class DedicatedFormatRollingFileWriterTest {
                         new FileIndexOptions(coreOptions),
                         FileSource.APPEND,
                         false,
-                        BlobFileContext.create(SCHEMA, coreOptions));
+                        BlobFileContext.create(SCHEMA, coreOptions),
+                        ShreddingWritePlanHistory::empty);
 
         List<InternalRow> rows =
                 Arrays.asList(
@@ -268,7 +271,8 @@ public class DedicatedFormatRollingFileWriterTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false, // statsDenseStore
-                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())));
+                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())),
+                        ShreddingWritePlanHistory::empty);
 
         // Create large blob data that will exceed the blob target file size
         byte[] largeBlobData = new byte[3 * 1024 * 1024]; // 3 MB blob data
@@ -338,7 +342,8 @@ public class DedicatedFormatRollingFileWriterTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false,
-                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())));
+                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())),
+                        ShreddingWritePlanHistory::empty);
 
         byte[] blobData = new byte[1024 * 1024];
         new Random(321).nextBytes(blobData);
@@ -404,7 +409,8 @@ public class DedicatedFormatRollingFileWriterTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false, // statsDenseStore
-                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())));
+                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())),
+                        ShreddingWritePlanHistory::empty);
 
         // Create blob data that will trigger rolling
         byte[] blobData = new byte[1024 * 1024]; // 1 MB blob data
@@ -484,7 +490,8 @@ public class DedicatedFormatRollingFileWriterTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false, // statsDenseStore
-                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())));
+                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())),
+                        ShreddingWritePlanHistory::empty);
 
         // Create blob data that will trigger rolling
         byte[] blobData = new byte[1024 * 1024]; // 1 MB blob data
@@ -705,7 +712,8 @@ public class DedicatedFormatRollingFileWriterTest {
                         new FileIndexOptions(),
                         FileSource.APPEND,
                         false, // statsDenseStore
-                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())));
+                        BlobFileContext.create(SCHEMA, new CoreOptions(new Options())),
+                        ShreddingWritePlanHistory::empty);
 
         // Write data
         for (int i = 0; i < 3; i++) {

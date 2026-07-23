@@ -25,6 +25,8 @@ import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.shredding.MapSharedShreddingFieldMeta;
 import org.apache.paimon.data.shredding.MapSharedShreddingUtils;
 import org.apache.paimon.data.shredding.MapShreddingDefine;
+import org.apache.paimon.data.variant.GenericVariant;
+import org.apache.paimon.data.variant.PaimonShreddingUtils;
 import org.apache.paimon.format.FileFormat;
 import org.apache.paimon.format.FileFormatFactory;
 import org.apache.paimon.format.FormatMetadataUtils;
@@ -32,6 +34,7 @@ import org.apache.paimon.format.FormatReaderContext;
 import org.apache.paimon.format.FormatWriter;
 import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.format.SupportsFieldMetadata;
+import org.apache.paimon.format.SupportsShreddingFileMetadata;
 import org.apache.paimon.format.orc.OrcFileFormat;
 import org.apache.paimon.format.orc.OrcTypeUtil;
 import org.apache.paimon.format.parquet.ParquetFileFormat;
@@ -51,6 +54,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -121,6 +125,136 @@ class ShreddingWritePlanFormatTest {
                 .hasMessage("Composing multiple active shredding write plans is not supported.");
     }
 
+    @Test
+    void testLoadsHistoryOnlyForActiveWritePlan() throws Exception {
+        FileFormat format =
+                new ParquetFileFormat(
+                        new FileFormatFactory.FormatContext(
+                                mapSharedShreddingOptions(), 1024, 1024));
+        AtomicInteger loadCount = new AtomicInteger();
+        FormatWriterFactory writerFactory =
+                ShreddingWritePlanWriterFactories.createWriterFactory(
+                        format,
+                        logicalRowType(),
+                        () -> {
+                            loadCount.incrementAndGet();
+                            return ShreddingWritePlanHistory.empty();
+                        });
+        assertThat(loadCount).hasValue(0);
+
+        FileIO fileIO = LocalFileIO.create();
+        Path file = new Path(tempDir.toString(), UUID.randomUUID() + ".parquet");
+        PositionOutputStream out = fileIO.newOutputStream(file, false);
+        FormatWriter writer = writerFactory.create(out, "none");
+        assertThat(loadCount).hasValue(1);
+        writer.addElement(GenericRow.of(1, stringKeyMap("a", 10L)));
+        writer.close();
+        out.close();
+    }
+
+    @Test
+    void testUpdatesMapSharedShreddingHistoryAfterEachFile() throws Exception {
+        Options options = mapSharedShreddingOptions();
+        assertUpdatesMapSharedShreddingHistory(
+                new ParquetFileFormat(new FileFormatFactory.FormatContext(options, 1024, 1024)),
+                "parquet");
+        assertUpdatesMapSharedShreddingHistory(
+                new OrcFileFormat(new FileFormatFactory.FormatContext(options, 1024, 1024)), "orc");
+    }
+
+    @Test
+    void testParquetRestoresVariantSchemaFromPreviousFile() throws Exception {
+        assertParquetVariantSchemaForSecondFile(true, "age");
+    }
+
+    @Test
+    void testParquetInfersVariantSchemaForEachFileByDefault() throws Exception {
+        assertParquetVariantSchemaForSecondFile(false, "name");
+    }
+
+    private void assertParquetVariantSchemaForSecondFile(
+            boolean restoreFromHistory, String expectedField) throws Exception {
+        Options options = new Options();
+        options.set(CoreOptions.VARIANT_INFER_SHREDDING_SCHEMA, true);
+        options.set(CoreOptions.VARIANT_RESTORE_SHREDDING_SCHEMA_FROM_HISTORY, restoreFromHistory);
+        options.set(CoreOptions.VARIANT_SHREDDING_MAX_INFER_BUFFER_ROW, 1);
+        FileFormat format =
+                new ParquetFileFormat(new FileFormatFactory.FormatContext(options, 1024, 1024));
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD(0, "v", DataTypes.VARIANT()));
+        FileIO fileIO = LocalFileIO.create();
+        ShreddingWritePlanHistory history = ShreddingWritePlanHistory.empty();
+        AtomicInteger historyLoadCount = new AtomicInteger();
+        FormatWriterFactory writerFactory =
+                ShreddingWritePlanWriterFactories.createWriterFactory(
+                        format,
+                        rowType,
+                        () -> {
+                            historyLoadCount.incrementAndGet();
+                            return history;
+                        });
+
+        Path firstFile = new Path(tempDir.toString(), UUID.randomUUID() + ".parquet");
+        write(
+                fileIO,
+                firstFile,
+                writerFactory,
+                GenericRow.of(GenericVariant.fromJson("{\"age\":30}")));
+        assertThat(history.files()).hasSize(restoreFromHistory ? 1 : 0);
+
+        Path secondFile = new Path(tempDir.toString(), UUID.randomUUID() + ".parquet");
+        write(
+                fileIO,
+                secondFile,
+                writerFactory,
+                GenericRow.of(GenericVariant.fromJson("{\"name\":\"Alice\"}")));
+        assertThat(history.files()).hasSize(restoreFromHistory ? 2 : 0);
+        ShreddingFileMetadata secondMetadata =
+                ((SupportsShreddingFileMetadata) format)
+                        .readShreddingFileMetadata(
+                                new FormatReaderContext(
+                                        fileIO, secondFile, fileIO.getFileSize(secondFile)));
+
+        RowType secondVariantType = (RowType) secondMetadata.physicalRowType().getTypeAt(0);
+        RowType typedValueType =
+                (RowType)
+                        secondVariantType
+                                .getField(PaimonShreddingUtils.TYPED_VALUE_FIELD_NAME)
+                                .type();
+        assertThat(typedValueType.getFieldNames()).containsExactly(expectedField);
+        assertThat(historyLoadCount).hasValue(restoreFromHistory ? 2 : 0);
+    }
+
+    private void assertUpdatesMapSharedShreddingHistory(FileFormat format, String extension)
+            throws Exception {
+        FileIO fileIO = LocalFileIO.create();
+        ShreddingWritePlanHistory history = ShreddingWritePlanHistory.empty();
+        FormatWriterFactory writerFactory =
+                ShreddingWritePlanWriterFactories.createWriterFactory(
+                        format, logicalRowType(), () -> history);
+
+        Path firstFile = new Path(tempDir.toString(), UUID.randomUUID() + "." + extension);
+        write(fileIO, firstFile, writerFactory, GenericRow.of(1, stringKeyMap("a", 10L)));
+        assertThat(history.files()).hasSize(1);
+
+        Path secondFile = new Path(tempDir.toString(), UUID.randomUUID() + "." + extension);
+        write(
+                fileIO,
+                secondFile,
+                writerFactory,
+                GenericRow.of(2, stringKeyMap("b", 20L, "c", 30L)));
+        assertThat(history.files()).hasSize(2);
+
+        Map<String, Map<String, String>> fieldMetadata =
+                ((SupportsFieldMetadata) format)
+                        .readFieldMetadata(
+                                new FormatReaderContext(
+                                        fileIO, secondFile, fileIO.getFileSize(secondFile)));
+        MapSharedShreddingFieldMeta fieldMeta =
+                MapSharedShreddingUtils.deserializeMetadata(fieldMetadata.get("tags"));
+        assertThat(fieldMeta.numColumns()).isEqualTo(1);
+        assertThat(fieldMeta.maxRowWidth()).isEqualTo(2);
+    }
+
     private Map<String, Map<String, String>> writeAndReadFieldMetadata(
             FileFormat format, String extension, String compression) throws IOException {
         FileIO fileIO = LocalFileIO.create();
@@ -137,6 +271,16 @@ class ShreddingWritePlanFormatTest {
         FormatReaderContext readerContext =
                 new FormatReaderContext(fileIO, file, fileIO.getFileSize(file));
         return ((SupportsFieldMetadata) format).readFieldMetadata(readerContext);
+    }
+
+    private static void write(
+            FileIO fileIO, Path file, FormatWriterFactory writerFactory, GenericRow row)
+            throws IOException {
+        PositionOutputStream out = fileIO.newOutputStream(file, false);
+        FormatWriter writer = writerFactory.create(out, "none");
+        writer.addElement(row);
+        writer.close();
+        out.close();
     }
 
     private static RowType logicalRowType() {

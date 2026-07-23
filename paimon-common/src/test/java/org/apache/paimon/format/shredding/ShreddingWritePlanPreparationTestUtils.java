@@ -18,19 +18,18 @@
 
 package org.apache.paimon.format.shredding;
 
+import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.shredding.ShreddingWritePlan;
-import org.apache.paimon.format.FormatWriter;
-import org.apache.paimon.fs.PositionOutputStream;
 
-import java.io.IOException;
+import java.util.List;
 
-/** Format writer factories that can create a writer for a shredded physical row layout. */
-public interface SupportsShreddingWritePlan {
+/** Test utilities for {@link ShreddingWritePlanPreparation}. */
+public class ShreddingWritePlanPreparationTestUtils {
 
-    FormatWriter createWithShreddingWritePlan(
-            PositionOutputStream out, String compression, ShreddingWritePlan writePlan)
-            throws IOException;
+    private ShreddingWritePlanPreparationTestUtils() {}
 
-    default void commitShreddingMetadata(FormatWriter writer, ShreddingFileMetadata fileMetadata)
-            throws IOException {}
+    public static ShreddingWritePlan createPlan(
+            ShreddingWritePlanPreparation preparation, List<InternalRow> sampleRows) {
+        return preparation.createPlan(sampleRows);
+    }
 }

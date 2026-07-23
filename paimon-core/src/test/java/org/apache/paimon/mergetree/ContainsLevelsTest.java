@@ -238,8 +238,13 @@ public class ContainsLevelsTest {
                         rowType,
                         new FlushingFileFormat("avro"),
                         pathFactoryMap,
+                        schemaId -> rowType,
                         VALUE_128_MB.getBytes())
-                .build(BinaryRow.EMPTY_ROW, 0, new CoreOptions(new Options()));
+                .build(
+                        BinaryRow.EMPTY_ROW,
+                        0,
+                        new CoreOptions(new Options()),
+                        Collections.emptyList());
     }
 
     private KeyValueFileReaderFactory createReaderFactory() {

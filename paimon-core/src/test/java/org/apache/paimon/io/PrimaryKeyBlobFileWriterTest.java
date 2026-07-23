@@ -98,8 +98,13 @@ class PrimaryKeyBlobFileWriterTest {
                                 valueType,
                                 new FlushingFileFormat("avro"),
                                 pathFactories,
+                                schemaId -> valueType,
                                 1024 * 1024)
-                        .build(BinaryRow.EMPTY_ROW, 0, new CoreOptions(options));
+                        .build(
+                                BinaryRow.EMPTY_ROW,
+                                0,
+                                new CoreOptions(options),
+                                Collections.emptyList());
         DataFilePathFactory pathFactory = factory.pathFactory(0);
         Path descriptorPath =
                 pathFactory.newPathFromExtension(ManagedBlobReferenceFile.MANAGED_BLOB_SUFFIX);

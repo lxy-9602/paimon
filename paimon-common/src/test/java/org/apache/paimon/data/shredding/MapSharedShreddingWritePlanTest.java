@@ -23,6 +23,9 @@ import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericMap;
 import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.InternalRow;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
+import org.apache.paimon.format.shredding.ShreddingWritePlanPreparation;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.types.DataTypes;
 import org.apache.paimon.types.RowType;
@@ -33,6 +36,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import static org.apache.paimon.format.shredding.ShreddingWritePlanPreparationTestUtils.createPlan;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link MapSharedShreddingWritePlan}. */
@@ -82,7 +86,7 @@ class MapSharedShreddingWritePlanTest {
     }
 
     @Test
-    void testFactoryInfersColumnCountFromFirstRow() {
+    void testFactoryUsesMaxColumnsWithoutHistory() {
         RowType logicalType =
                 DataTypes.ROW(
                         DataTypes.FIELD(
@@ -90,32 +94,34 @@ class MapSharedShreddingWritePlanTest {
         MapSharedShreddingWritePlanFactory factory = createFactory(logicalType, 4);
 
         assertThat(factory.shouldCreateWritePlan()).isTrue();
-        assertThat(factory.shouldInferWritePlan()).isTrue();
-        assertThat(factory.inferBufferRowCount()).isEqualTo(1);
-        assertThat(
-                        factory.createWritePlan(
-                                        Collections.singletonList(
-                                                GenericRow.of(
-                                                        stringKeyMap("a", 1, "b", 2, "c", 3))))
-                                .physicalRowType())
+        ShreddingWritePlanPreparation preparation =
+                factory.prepare(ShreddingWritePlanHistory.empty());
+        assertThat(createPlan(preparation, Collections.emptyList()).physicalRowType())
                 .isEqualTo(
                         MapSharedShreddingUtils.logicalToPhysicalSchema(
-                                logicalType, Collections.singletonMap("tags", 3)));
+                                logicalType, Collections.singletonMap("tags", 4)));
     }
 
     @Test
-    void testFactoryCapsInferredColumnCountAtMaxColumns() {
+    void testFactoryRestoresAndCapsColumnCountFromHistory() {
         RowType logicalType =
                 DataTypes.ROW(
                         DataTypes.FIELD(
                                 0, "tags", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())));
-        MapSharedShreddingWritePlanFactory factory = createFactory(logicalType, 2);
+        ShreddingWritePlanHistory history = history("tags", 8, 3);
 
         assertThat(
-                        factory.createWritePlan(
-                                        Collections.singletonList(
-                                                GenericRow.of(
-                                                        stringKeyMap("a", 1, "b", 2, "c", 3))))
+                        createPlan(
+                                        createFactory(logicalType, 4).prepare(history),
+                                        Collections.emptyList())
+                                .physicalRowType())
+                .isEqualTo(
+                        MapSharedShreddingUtils.logicalToPhysicalSchema(
+                                logicalType, Collections.singletonMap("tags", 3)));
+        assertThat(
+                        createPlan(
+                                        createFactory(logicalType, 2).prepare(history),
+                                        Collections.emptyList())
                                 .physicalRowType())
                 .isEqualTo(
                         MapSharedShreddingUtils.logicalToPhysicalSchema(
@@ -131,7 +137,7 @@ class MapSharedShreddingWritePlanTest {
         MapSharedShreddingWritePlanFactory factory = createFactory(logicalType, 3, "sequential");
         InternalRow first = GenericRow.of(stringKeyMap("a", 1, "b", 2, "c", 6));
         InternalRow second = GenericRow.of(stringKeyMap("b", 3, "d", 4, "a", 5));
-        ShreddingWritePlan writePlan = factory.createWritePlan(Collections.singletonList(first));
+        ShreddingWritePlan writePlan = createWritePlan(factory);
 
         writePlan.toPhysicalRow(first).getRow(0, 5);
         InternalRow physicalMap = writePlan.toPhysicalRow(second).getRow(0, 5);
@@ -150,7 +156,7 @@ class MapSharedShreddingWritePlanTest {
                                 0, "tags", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())));
         MapSharedShreddingWritePlanFactory factory = createFactory(logicalType, 3);
         InternalRow first = GenericRow.of(stringKeyMap("a", 10, "b", 20, "c", 30));
-        ShreddingWritePlan writePlan = factory.createWritePlan(Collections.singletonList(first));
+        ShreddingWritePlan writePlan = createWritePlan(factory);
 
         writePlan.toPhysicalRow(first).getRow(0, 5);
         writePlan.toPhysicalRow(GenericRow.of(stringKeyMap("a", 40, "b", 50))).getRow(0, 5);
@@ -186,6 +192,28 @@ class MapSharedShreddingWritePlanTest {
                     "fields.tags.map.shared-shredding.column-placement-policy", placementPolicy);
         }
         return new MapSharedShreddingWritePlanFactory(logicalType, options);
+    }
+
+    private static ShreddingWritePlan createWritePlan(MapSharedShreddingWritePlanFactory factory) {
+        return createPlan(
+                factory.prepare(ShreddingWritePlanHistory.empty()), Collections.emptyList());
+    }
+
+    private static ShreddingWritePlanHistory history(
+            String fieldName, int numColumns, int maxRowWidth) {
+        MapSharedShreddingFieldMeta fieldMeta =
+                new MapSharedShreddingFieldMeta(
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptySet(),
+                        numColumns,
+                        maxRowWidth);
+        Map<String, String> metadata = new LinkedHashMap<>();
+        MapSharedShreddingUtils.serializeMetadata(fieldMeta, "none", metadata);
+        return new ShreddingWritePlanHistory(
+                Collections.singletonList(
+                        new ShreddingFileMetadata(
+                                null, Collections.singletonMap(fieldName, metadata))));
     }
 
     private static GenericMap stringKeyMap(Object... keyValues) {

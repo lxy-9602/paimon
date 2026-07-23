@@ -105,6 +105,7 @@ public class AppendOnlyFileStore extends AbstractFileStore<InternalRow> {
                     readForCompact,
                     schema.id(),
                     rowType,
+                    id -> schemaManager.schema(id).logicalRowType(),
                     partitionType,
                     pathFactory(),
                     snapshotManager(),

@@ -226,8 +226,13 @@ public class ChangelogMergeTreeRewriterTest {
                         valueType,
                         new FlushingFileFormat("avro"),
                         k -> createNonPartFactory(path),
+                        schemaId -> valueType,
                         VALUE_128_MB.getBytes())
-                .build(BinaryRow.EMPTY_ROW, 0, new CoreOptions(new Options()));
+                .build(
+                        BinaryRow.EMPTY_ROW,
+                        0,
+                        new CoreOptions(new Options()),
+                        Collections.emptyList());
     }
 
     private KeyValueFileReaderFactory createReaderFactory(
@@ -308,7 +313,7 @@ public class ChangelogMergeTreeRewriterTest {
                     MAX_LEVEL,
                     CoreOptions.MergeEngine.DEDUPLICATE,
                     readerFactory,
-                    writerFactory,
+                    ignored -> writerFactory,
                     keyComparator,
                     null,
                     DeduplicateMergeFunction.factory(),

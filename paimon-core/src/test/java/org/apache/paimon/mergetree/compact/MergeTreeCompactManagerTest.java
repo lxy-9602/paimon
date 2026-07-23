@@ -369,9 +369,10 @@ public class MergeTreeCompactManagerTest {
                         TestKeyValueGenerator.DEFAULT_ROW_TYPE,
                         fileFormat(coreOptions),
                         ignore -> store.pathFactory(),
+                        schemaId -> TestKeyValueGenerator.DEFAULT_ROW_TYPE,
                         coreOptions.targetFileSize(true));
         KeyValueFileWriterFactory writerFactory =
-                writerFactoryBuilder.build(partition, 0, coreOptions);
+                writerFactoryBuilder.build(partition, 0, coreOptions, Collections.emptyList());
 
         MergeSorter mergeSorter =
                 new MergeSorter(
@@ -383,7 +384,7 @@ public class MergeTreeCompactManagerTest {
         MergeTreeCompactRewriter rewriter =
                 new MergeTreeCompactRewriter(
                         readerFactory,
-                        writerFactory,
+                        ignored -> writerFactory,
                         keyComparator,
                         null,
                         DeduplicateMergeFunction.factory(),

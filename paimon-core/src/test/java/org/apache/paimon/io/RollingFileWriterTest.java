@@ -24,6 +24,7 @@ import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.FileFormat;
 import org.apache.paimon.format.FormatReaderContext;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.fs.local.LocalFileIO;
 import org.apache.paimon.manifest.FileSource;
@@ -83,7 +84,8 @@ public class RollingFileWriterTest {
                                                 SCHEMA,
                                                 SimpleColStatsCollector.createFullStatsFactories(
                                                         SCHEMA.getFieldCount()),
-                                                CoreOptions.FILE_COMPRESSION.defaultValue()),
+                                                CoreOptions.FILE_COMPRESSION.defaultValue(),
+                                                ShreddingWritePlanHistory::empty),
                                         new DataFilePathFactory(
                                                         new Path(tempDir + "/bucket-0"),
                                                         CoreOptions.FILE_FORMAT
@@ -158,7 +160,8 @@ public class RollingFileWriterTest {
                         true,
                         false,
                         null,
-                        rowFormat);
+                        rowFormat,
+                        ShreddingWritePlanHistory::empty);
 
         writer.write(GenericRow.of(1));
         writer.close();
@@ -208,7 +211,8 @@ public class RollingFileWriterTest {
                         true,
                         false,
                         null,
-                        rowFormat);
+                        rowFormat,
+                        ShreddingWritePlanHistory::empty);
 
         writer.writeBundle(
                 new SingleUseBundleRecords(Arrays.asList(GenericRow.of(1), GenericRow.of(2))));

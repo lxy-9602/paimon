@@ -65,6 +65,7 @@ public class BucketedAppendFileStoreWrite extends BaseAppendFileStoreWrite {
                 read,
                 schemaId,
                 rowType,
+                id -> schemaManager.schema(id).logicalRowType(),
                 partitionType,
                 pathFactory,
                 snapshotManager,

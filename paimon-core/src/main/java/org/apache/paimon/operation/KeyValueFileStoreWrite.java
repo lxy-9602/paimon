@@ -134,6 +134,7 @@ public class KeyValueFileStoreWrite extends MemoryFileStoreWrite<KeyValue> {
                         valueType,
                         fileFormat(options),
                         createFormatPathFactories(options, formatPathFactory),
+                        id -> schemaManager.schema(id).logicalRowType(),
                         options.targetFileSize(true));
         this.keyComparatorSupplier = keyComparatorSupplier;
         this.mfFactory = mfFactory;
@@ -216,7 +217,7 @@ public class KeyValueFileStoreWrite extends MemoryFileStoreWrite<KeyValue> {
         }
 
         KeyValueFileWriterFactory writerFactory =
-                writerFactoryBuilder.build(partition, bucket, options);
+                writerFactoryBuilder.build(partition, bucket, options, restoreFiles);
         Comparator<InternalRow> keyComparator = keyComparatorSupplier.get();
         CompactManager compactManager =
                 compactManagerFactory.create(

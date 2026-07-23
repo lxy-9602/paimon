@@ -18,11 +18,7 @@
 
 package org.apache.paimon.format.shredding;
 
-import org.apache.paimon.data.InternalRow;
-import org.apache.paimon.data.shredding.ShreddingWritePlan;
 import org.apache.paimon.types.RowType;
-
-import java.util.List;
 
 /** Creates per-file shredding write plans. */
 public interface ShreddingWritePlanFactory {
@@ -31,9 +27,7 @@ public interface ShreddingWritePlanFactory {
 
     boolean shouldCreateWritePlan();
 
-    boolean shouldInferWritePlan();
+    boolean requiresHistory();
 
-    int inferBufferRowCount();
-
-    ShreddingWritePlan createWritePlan(List<InternalRow> sampleRows);
+    ShreddingWritePlanPreparation prepare(ShreddingWritePlanHistory history);
 }

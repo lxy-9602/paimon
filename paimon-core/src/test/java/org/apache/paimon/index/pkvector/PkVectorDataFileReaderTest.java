@@ -93,8 +93,9 @@ class PkVectorDataFileReaderTest {
                                 valueType,
                                 format,
                                 ignored -> pathFactory,
+                                schemaId -> valueType,
                                 VALUE_128_MB.getBytes())
-                        .build(BinaryRow.EMPTY_ROW, 0, options);
+                        .build(BinaryRow.EMPTY_ROW, 0, options, Collections.emptyList());
         RollingFileWriter<KeyValue, DataFileMeta> writer =
                 writerFactory.createRollingMergeTreeFileWriter(1, FileSource.COMPACT);
         try {

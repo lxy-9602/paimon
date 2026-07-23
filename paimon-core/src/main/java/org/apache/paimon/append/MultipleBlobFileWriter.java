@@ -23,6 +23,7 @@ import org.apache.paimon.data.BlobFetchMetricReporter;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fileindex.FileIndexOptions;
 import org.apache.paimon.format.blob.BlobFileFormat;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.DataFilePathFactory;
@@ -88,7 +89,8 @@ public class MultipleBlobFileWriter implements Closeable {
                                                     new SimpleColStatsCollector.Factory[] {
                                                         NoneSimpleColStatsCollector::new
                                                     },
-                                                    "none"),
+                                                    "none",
+                                                    ShreddingWritePlanHistory::empty),
                                             pathFactory.newBlobPath(),
                                             writeSchema.project(blobFieldName),
                                             schemaId,

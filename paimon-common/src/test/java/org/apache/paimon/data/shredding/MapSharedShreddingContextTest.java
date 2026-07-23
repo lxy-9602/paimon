@@ -20,95 +20,89 @@ package org.apache.paimon.data.shredding;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link MapSharedShreddingContext}. */
 class MapSharedShreddingContextTest {
 
     @Test
     void testFirstFileUsesKMax() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
+        MapSharedShreddingContext context = context("tags", 256);
 
         assertThat(context.computeNextK()).containsEntry("tags", 256);
     }
 
     @Test
     void testAdaptKAfterOneFile() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
-
-        context.reportFileStats("tags", 7);
+        MapSharedShreddingContext context = context("tags", 256, 7);
 
         assertThat(context.computeNextK()).containsEntry("tags", 7);
     }
 
     @Test
     void testAdaptKCappedByKMax() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 10));
-
-        context.reportFileStats("tags", 20);
+        MapSharedShreddingContext context = context("tags", 10, 20);
 
         assertThat(context.computeNextK()).containsEntry("tags", 10);
     }
 
     @Test
-    void testWindowP90UsesMaxWhenSamplesAreClose() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
-
-        context.reportFileStats("tags", 3);
-        context.reportFileStats("tags", 7);
-        context.reportFileStats("tags", 5);
+    void testHistoryP90UsesMaxWhenSamplesAreClose() {
+        MapSharedShreddingContext context = context("tags", 256, 3, 7, 5);
 
         assertThat(context.computeNextK()).containsEntry("tags", 7);
     }
 
     @Test
-    void testWindowP90IgnoresSingleFarOutlier() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
-
+    void testHistoryP90IgnoresSingleFarOutlier() {
+        List<Integer> widths = new ArrayList<>();
         for (int i = 0; i < 19; i++) {
-            context.reportFileStats("tags", 3);
+            widths.add(3);
         }
-        context.reportFileStats("tags", 1000);
+        widths.add(1000);
+        MapSharedShreddingContext context = context("tags", 256, widths);
 
         assertThat(context.computeNextK()).containsEntry("tags", 3);
     }
 
     @Test
-    void testWindowP90UsesMaxWithinAbsoluteSlack() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
-
+    void testHistoryP90UsesMaxWithinAbsoluteSlack() {
+        List<Integer> widths = new ArrayList<>();
         for (int i = 0; i < 19; i++) {
-            context.reportFileStats("tags", 3);
+            widths.add(3);
         }
-        context.reportFileStats("tags", 7);
+        widths.add(7);
+        MapSharedShreddingContext context = context("tags", 256, widths);
 
         assertThat(context.computeNextK()).containsEntry("tags", 7);
     }
 
     @Test
-    void testWindowP90UsesMaxWithinRelativeSlack() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
-
+    void testHistoryP90UsesMaxWithinRelativeSlack() {
+        List<Integer> widths = new ArrayList<>();
         for (int i = 0; i < 19; i++) {
-            context.reportFileStats("tags", 100);
+            widths.add(100);
         }
-        context.reportFileStats("tags", 125);
+        widths.add(125);
+        MapSharedShreddingContext context = context("tags", 256, widths);
 
         assertThat(context.computeNextK()).containsEntry("tags", 125);
     }
 
     @Test
-    void testWindowP90IgnoresMaxBeyondBothSlacks() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
-
+    void testHistoryP90IgnoresMaxBeyondBothSlacks() {
+        List<Integer> widths = new ArrayList<>();
         for (int i = 0; i < 19; i++) {
-            context.reportFileStats("tags", 100);
+            widths.add(100);
         }
-        context.reportFileStats("tags", 130);
+        widths.add(130);
+        MapSharedShreddingContext context = context("tags", 256, widths);
 
         assertThat(context.computeNextK()).containsEntry("tags", 100);
     }
@@ -117,39 +111,54 @@ class MapSharedShreddingContextTest {
     void testMultipleColumnsIndependent() {
         Map<String, Integer> columns = columns("tags", 256);
         columns.put("attrs", 128);
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns);
-
-        context.reportFileStats("tags", 10);
-        context.reportFileStats("attrs", 5);
+        Map<String, List<Integer>> widths = new LinkedHashMap<>();
+        widths.put("tags", Collections.singletonList(10));
+        widths.put("attrs", Collections.singletonList(5));
+        MapSharedShreddingContext context = new MapSharedShreddingContext(columns, widths);
 
         assertThat(context.computeNextK()).containsEntry("tags", 10).containsEntry("attrs", 5);
     }
 
     @Test
-    void testGetShreddingColumnNamesSorted() {
+    void testMultipleColumnsUseIndependentHistoryWindows() {
         Map<String, Integer> columns = columns("tags", 256);
-        columns.put("metrics", 64);
-        columns.put("props", 128);
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns);
+        columns.put("attrs", 128);
+        columns.put("missing", 64);
 
-        assertThat(context.getShreddingColumnNames()).containsExactly("metrics", "props", "tags");
-        assertThatThrownBy(() -> context.getShreddingColumnNames().add("extra"))
-                .isInstanceOf(UnsupportedOperationException.class);
+        List<Integer> tagWidths = new ArrayList<>();
+        List<Integer> attrWidths = new ArrayList<>();
+        for (int i = 0; i < 19; i++) {
+            tagWidths.add(3);
+            attrWidths.add(100);
+        }
+        tagWidths.add(1000);
+        attrWidths.add(125);
+
+        Map<String, List<Integer>> widths = new LinkedHashMap<>();
+        widths.put("tags", tagWidths);
+        widths.put("attrs", attrWidths);
+        MapSharedShreddingContext context = new MapSharedShreddingContext(columns, widths);
+
+        assertThat(context.computeNextK())
+                .containsEntry("tags", 3)
+                .containsEntry("attrs", 125)
+                .containsEntry("missing", 64);
     }
 
-    @Test
-    void testSlidingWindowEvictsOldEntries() {
-        MapSharedShreddingContext context = new MapSharedShreddingContext(columns("tags", 256));
-
-        context.reportFileStats("tags", 104);
-        for (int i = 0; i < 19; i++) {
-            context.reportFileStats("tags", 100);
+    private static MapSharedShreddingContext context(
+            String name, int maxColumns, int... historicalWidths) {
+        List<Integer> widths = new ArrayList<>();
+        for (int width : historicalWidths) {
+            widths.add(width);
         }
-        assertThat(context.computeNextK()).containsEntry("tags", 104);
+        return context(name, maxColumns, widths);
+    }
 
-        context.reportFileStats("tags", 100);
-
-        assertThat(context.computeNextK()).containsEntry("tags", 100);
+    private static MapSharedShreddingContext context(
+            String name, int maxColumns, List<Integer> historicalWidths) {
+        Map<String, List<Integer>> widths = new LinkedHashMap<>();
+        widths.put(name, historicalWidths);
+        return new MapSharedShreddingContext(columns(name, maxColumns), widths);
     }
 
     private static Map<String, Integer> columns(String name, int maxColumns) {

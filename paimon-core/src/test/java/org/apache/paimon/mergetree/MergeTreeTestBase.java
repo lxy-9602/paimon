@@ -185,9 +185,14 @@ public abstract class MergeTreeTestBase {
                         valueType,
                         flushingAvro,
                         pathFactoryMap,
+                        schemaId -> valueType,
                         this.options.targetFileSize(true));
-        writerFactory = writerFactoryBuilder.build(BinaryRow.EMPTY_ROW, 0, this.options);
-        compactWriterFactory = writerFactoryBuilder.build(BinaryRow.EMPTY_ROW, 0, this.options);
+        writerFactory =
+                writerFactoryBuilder.build(
+                        BinaryRow.EMPTY_ROW, 0, this.options, Collections.emptyList());
+        compactWriterFactory =
+                writerFactoryBuilder.build(
+                        BinaryRow.EMPTY_ROW, 0, this.options, Collections.emptyList());
         writer = createMergeTreeWriter(Collections.emptyList());
     }
 

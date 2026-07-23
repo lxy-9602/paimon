@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import static java.util.Collections.singletonList;
@@ -85,7 +86,7 @@ public class ClusteringCompactManager extends CompactFutureManager {
             CacheManager cacheManager,
             KeyValueFileReaderFactory keyReaderFactory,
             KeyValueFileReaderFactory valueReaderFactory,
-            KeyValueFileWriterFactory writerFactory,
+            Function<List<DataFileMeta>, KeyValueFileWriterFactory> writerFactoryProvider,
             ExecutorService executor,
             @Nullable BucketedDvMaintainer dvMaintainer,
             boolean lazyGenDeletionFile,
@@ -147,7 +148,7 @@ public class ClusteringCompactManager extends CompactFutureManager {
                         clusteringComparatorInValue,
                         ioManager,
                         valueReaderFactory,
-                        writerFactory,
+                        writerFactoryProvider,
                         fileLevels,
                         targetFileSize,
                         sortSpillBufferSize,

@@ -31,6 +31,7 @@ import org.apache.paimon.format.parquet.writer.ParquetBulkWriter;
 import org.apache.paimon.format.parquet.writer.ParquetMetadataBulkWriter;
 import org.apache.paimon.format.parquet.writer.RowDataParquetBuilder;
 import org.apache.paimon.format.parquet.writer.StreamOutputFile;
+import org.apache.paimon.format.shredding.ShreddingFileMetadata;
 import org.apache.paimon.format.shredding.SupportsShreddingWritePlan;
 import org.apache.paimon.fs.PositionOutputStream;
 
@@ -87,9 +88,8 @@ public class ParquetWriterFactory implements FormatWriterFactory, SupportsShredd
     }
 
     @Override
-    public void commitShreddingMetadata(
-            FormatWriter writer, ShreddingWritePlan writePlan, String compression) {
-        Map<String, Map<String, String>> fieldMetadata = writePlan.fieldMetadata(compression);
+    public void commitShreddingMetadata(FormatWriter writer, ShreddingFileMetadata fileMetadata) {
+        Map<String, Map<String, String>> fieldMetadata = fileMetadata.fieldMetadata();
         if (fieldMetadata.isEmpty()) {
             return;
         }
@@ -98,7 +98,7 @@ public class ParquetWriterFactory implements FormatWriterFactory, SupportsShredd
         metadata.put(
                 FormatMetadataUtils.ARROW_SCHEMA_METADATA_KEY,
                 FormatMetadataUtils.buildArrowSchemaMetadata(
-                        writePlan.physicalRowType(),
+                        fileMetadata.physicalRowType(),
                         fieldMetadata,
                         FormatMetadataUtils.PARQUET_FIELD_ID_KEY));
         ((SupportsWriterMetadata) writer).addMetadata(metadata);

@@ -37,6 +37,7 @@ import org.apache.paimon.format.FileFormatDiscover;
 import org.apache.paimon.format.FlushingFileFormat;
 import org.apache.paimon.format.FormatReaderFactory;
 import org.apache.paimon.format.SimpleColStats;
+import org.apache.paimon.format.shredding.ShreddingWritePlanHistory;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.FileIOFinder;
 import org.apache.paimon.fs.FileStatus;
@@ -361,7 +362,8 @@ public class KeyValueFileReadWriteTest {
                         false,
                         options.dataEvolutionEnabled(),
                         null,
-                        BlobFileContext.create(schema, options));
+                        BlobFileContext.create(schema, options),
+                        ShreddingWritePlanHistory::empty);
         appendOnlyWriter.setMemoryPool(
                 new HeapMemorySegmentPool(options.writeBufferSize(), options.pageSize()));
         appendOnlyWriter.write(
@@ -414,8 +416,9 @@ public class KeyValueFileReadWriteTest {
                         // special format which flushes for every added element
                         new FlushingFileFormat(format),
                         pathFactoryMap,
+                        schemaId -> DEFAULT_ROW_TYPE,
                         suggestedFileSize)
-                .build(BinaryRow.EMPTY_ROW, 0, new CoreOptions(options));
+                .build(BinaryRow.EMPTY_ROW, 0, new CoreOptions(options), Collections.emptyList());
     }
 
     private KeyValueFileReaderFactory createReaderFactory(

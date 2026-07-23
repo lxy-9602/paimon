@@ -135,6 +135,7 @@ public class PostponeBucketFileStoreWrite extends MemoryFileStoreWrite<KeyValue>
                         valueType,
                         fileFormat,
                         createFormatPathFactories(this.options, formatPathFactory),
+                        id -> schema.logicalRowType(),
                         this.options.targetFileSize(true));
 
         // Ignoring previous files saves scanning time.
@@ -198,7 +199,7 @@ public class PostponeBucketFileStoreWrite extends MemoryFileStoreWrite<KeyValue>
                 restoreFiles.isEmpty(),
                 "Postpone bucket writers should not restore previous files. This is unexpected.");
         KeyValueFileWriterFactory writerFactory =
-                writerFactoryBuilder.build(partition, bucket, options);
+                writerFactoryBuilder.build(partition, bucket, options, restoreFiles);
         return new PostponeBucketWriter(
                 fileIO,
                 pathFactory.createDataFilePathFactory(partition, bucket),
